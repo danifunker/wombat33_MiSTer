@@ -1,0 +1,10 @@
+[
+  {"name":"FSAVE -(A7); FRESTORE (A7)+; FPU still usable, FP3=5 -> D1", "op_a":5, "program":[112,5,242,0,65,128,243,39,243,95,242,1,97,128,78,114,39,0], "result_reg":1, "expected":5},
+  {"name":"FSAVE/FRESTORE -(A7); FPU still usable, FP0=42 -> D1", "op_a":42, "program":[112,42,242,0,64,0,243,39,243,95,242,1,96,0,78,114,39,0], "result_reg":1, "expected":42},
+  {"name":"FSAVE/FRESTORE -(A7); FPU still usable, FP7=-1 -> D1", "op_a":-1, "program":[112,255,242,0,67,128,243,39,243,95,242,1,99,128,78,114,39,0], "result_reg":1, "expected":-1},
+  {"name":"FSAVE/FRESTORE -(A7); FPU still usable, FP3=63 -> D1", "op_a":63, "program":[112,63,242,0,65,128,243,39,243,95,242,1,97,128,78,114,39,0], "result_reg":1, "expected":63},
+  {"name":"FSAVE;FRESTORE;FSAVE;FRESTORE -(A7) twice; FP3=11 -> D1", "op_a":11, "program":[112,11,242,0,65,128,243,39,243,95,243,39,243,95,242,1,97,128,78,114,39,0], "result_reg":1, "expected":11},
+  {"name":"IDLE FRESTORE does NOT reload FP data: clobber FP3 5->99 -> D1=99", "op_a":5, "program":[112,5,242,0,65,128,243,39,112,99,242,0,65,128,243,95,242,1,97,128,78,114,39,0], "result_reg":1, "expected":99},
+  {"name":"FSAVE/FRESTORE (A0) does NOT reload FP data: clobber FP3 7->99 -> D1=99", "op_a":7, "program":[112,7,242,0,65,128,32,124,0,8,0,0,243,16,112,99,242,0,65,128,32,124,0,8,0,0,243,80,242,1,97,128,78,114,39,0], "result_reg":1, "expected":99},
+  {"name":"FRESTORE NULL frame (A0); FPU re-init, FMOVE.L #5,FP3 -> D1=5", "op_a":5, "program":[32,124,0,8,0,0,66,144,243,80,112,5,242,0,65,128,242,1,97,128,78,114,39,0], "result_reg":1, "expected":5}
+]

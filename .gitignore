@@ -1,0 +1,16 @@
+# verilator build outputs
+SingleStepTests/*/obj_dir/
+# preboot / macos_bench build dirs (each also has a local .gitignore)
+SingleStepTests/preboot/*/build/
+SingleStepTests/macos_bench/build/
+# corpus generator binaries
+SingleStepTests/gen/gen
+SingleStepTests/gen/gen_fpu
+*.o
+*.elf
+
+# raw working disk images (the committed copies are the compressed
+# bundles in SingleStepTests/prebuilt/*.tgz — these are regenerable via
+# the build_<bench>_<hda|dsk>.sh scripts)
+SingleStepTests/preboot/supervisor_bench/dist/*.hda
+SingleStepTests/preboot/supervisor_bench/dist/*.dsk
