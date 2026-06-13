@@ -51,15 +51,14 @@ COMMON ?= ../common
 VIDEO_VARIANT ?= dafb
 
 # Quadra 800 (Wombat) core additions:
-#   dafb  — Macintosh Quadra 800 built-in DAFB II video (djMEMC). VRAM
-#           at CPU $F9000000 (2 MB); DAFB register block at $F9800000.
-#           1 bpp is DAFB mode 0 (MSB-first, MAME dafb.cpp screen_update),
-#           but the row stride is PROGRAMMED by the ROM (DAFB reg 8, in
-#           32-bit words) for the sensed monitor's resolution — it is NOT
-#           a fixed constant like the NuBus cards. So the Q800 display
-#           variant reads the ROM's ScrnRow low-mem global ($0106) at
-#           runtime, exactly as the ROM video driver left it. This is an
-#           alias for `auto` below.
+#   dafb  — Macintosh Quadra 800 built-in DAFB II video (djMEMC). VRAM at
+#           CPU $F9000000 (2 MB); ScrnBase = $F9001000. The ROM boots it
+#           at 640x480 @ 8 bpp (256 colors, Apple 67 Hz mode) — REQUIRED
+#           display mode. So this variant paints 8 bpp (-DDISPLAY_BPP8,
+#           one byte per pixel) and reads the byte stride (1024 for
+#           640x480) from the ROM's ScrnRow low-mem global ($0106) at
+#           runtime, so other 256-color resolutions work too.
+#   dafb1 — same, but 1 bpp paint for when the screen is set to B&W.
 #
 # Carried Mac II / IIvi NuBus + built-in variants (still usable if a
 # NuBus video card is fitted in a Q800 slot, or for cross-checks):
@@ -74,6 +73,14 @@ VIDEO_VARIANT ?= dafb
 #           dots still assume 80 (cosmetic only).
 CDEFS_VIDEO :=
 ifeq ($(VIDEO_VARIANT),dafb)
+    # Quadra 800 built-in DAFB: REQUIRES the display set to 640x480, 256
+    # colors (8 bpp, 67 Hz) — the machine's boot default. 8 bpp = one
+    # byte per pixel; the byte stride (1024 for 640x480) is read from
+    # ScrnRow ($0106) at runtime.
+    ROW_BYTES := 1024
+    CDEFS_VIDEO := -DROW_BYTES_AUTO -DDISPLAY_BPP8
+else ifeq ($(VIDEO_VARIANT),dafb1)
+    # DAFB escape hatch: 1 bpp paint, for when the screen is set to B&W.
     ROW_BYTES := 80
     CDEFS_VIDEO := -DROW_BYTES_AUTO
 else ifeq ($(VIDEO_VARIANT),m2hires)
@@ -90,7 +97,7 @@ else ifeq ($(VIDEO_VARIANT),auto)
     ROW_BYTES := 80
     CDEFS_VIDEO := -DROW_BYTES_AUTO
 else
-    $(error Unknown VIDEO_VARIANT=$(VIDEO_VARIANT); known: dafb m2hires mdc824 toby v8 vasp auto)
+    $(error Unknown VIDEO_VARIANT=$(VIDEO_VARIANT); known: dafb dafb1 m2hires mdc824 toby v8 vasp auto)
 endif
 
 # MC68040 target (Quadra 800). -m68040 enables the 040 ISA (MOVE16,

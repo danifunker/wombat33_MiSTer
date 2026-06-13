@@ -6,6 +6,10 @@ the bench (no System needed) via the HFS boot block; the bench takes over
 in supervisor mode, runs its corpus, paints progress on the built-in DAFB
 display, and writes results to **`/Results.jsonl`** on the same disk.
 
+**REQUIREMENT: set the display to 640×480, 256 colors** (8 bpp — the
+Quadra 800 boot default). The bench paints the DAFB at 8 bpp; a different
+colour depth garbles the text. See `../../../prebuilt/README.md`.
+
 | Disk | Bench | Corpus |
 |---|---|---|
 | `quadra800-cpu.{hda,dsk}` | 68040 integer CPU | 722 rows (full ISA + 040 discriminators) |

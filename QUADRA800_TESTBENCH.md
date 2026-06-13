@@ -163,17 +163,28 @@ portable, oracle-clean signal) with result-address relocation. The
 pending the private-identity-page-table install — port that from
 `mmu_bench_main.c.68030-reference` (it solved the equivalent 030 problem).
 
-## 6. Display — built-in DAFB, 1 bpp (per the request)
+## 6. Display — built-in DAFB, 8 bpp / 640×480 / 256 colors
 
-The Quadra 800's built-in video is DAFB II at VRAM `$F9000000`. 1 bpp is
-DAFB mode 0 (MSB-first, `dafb.cpp` `screen_update`). The row **stride is
-software-programmed** by the ROM (DAFB reg 8, in 32-bit words) for the
-sensed monitor — it is *not* a fixed card constant. So the Q800 display
-variant (`VIDEO_VARIANT=dafb`, the default) uses the **auto-stride** path:
-`display_1bpp.c` reads the ROM's `ScrnRow` low-mem global (`$0106`) and
-`ScrnBase` (`$0824`) at runtime, exactly as the ROM video driver left
-them. One payload paints correctly on the real machine without hardcoding
-the resolution.
+The Quadra 800's built-in video is DAFB II at VRAM `$F9000000`
+(`ScrnBase` = `$F9001000`). **The ROM boots it at 640×480 @ 8 bpp (256
+colors, the Apple 67 Hz mode)** — *not* 1 bpp. That is the required
+display mode for the bench (set Monitors to 640×480 / 256 Colors).
+
+The paint kernel (`common/display/display_1bpp.c`, built with
+`-DDISPLAY_BPP8` for `VIDEO_VARIANT=dafb`, the default) therefore writes
+**one byte per pixel**: background `0xFF` (black via the default CLUT
+index 255), glyph strokes `0x00` (white). The byte **stride is
+software-programmed** by the ROM (1024 for 640×480) and read at runtime
+from `ScrnRow` (`$0106`); `ScrnBase` (`$0824`) gives the base. So the
+payload adapts to other 256-color resolutions without recompiling — only
+the *depth* is fixed at 8 bpp.
+
+> **Lesson (2026-06-13):** the first cut assumed the NuBus-era 1 bpp
+> power-on default and painted 1 bit per pixel into the 8 bpp DAFB
+> framebuffer — every font byte became a single 8 bpp pixel, so text came
+> out as garbled speckle (reproduced from a MAME VRAM dump, fixed, and
+> re-verified by host-rendering the paint kernel to a legible image). A
+> `dafb1` variant keeps the 1 bpp path for B&W screens.
 
 ## 7. MAME oracle setup (verified)
 

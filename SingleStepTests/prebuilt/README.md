@@ -7,6 +7,15 @@ the disk and it runs the bench straight from the HFS boot block — no
 System needed — painting progress on the built-in DAFB display and
 writing `/Results.jsonl` back to the same disk.
 
+> ## ⚠️ REQUIREMENT: set the display to **640×480, 256 colors**
+> The bench paints the built-in DAFB at **8 bits-per-pixel** (the Quadra
+> 800's boot default — the Apple 640×480 @ 67 Hz mode). If the monitor is
+> in a different colour depth the on-screen text will be garbled. Set
+> Monitors to **640×480, 256 Colors** before running (or just leave the
+> machine at its default). The byte stride is read from the ROM at
+> runtime, so other *resolutions* at 256 colors also work; the depth is
+> what matters. (A `dafb1` build exists for 1 bpp / B&W screens.)
+
 | Bundle (`2026-06-13`) | Bench | Corpus |
 |---|---|---|
 | `quadra800-cpu-2026-06-13.tgz` | 68040 integer CPU | 722 rows (full ISA + 040 discriminators: MOVE16, CACR/CAAR mask, RTM) |
@@ -35,19 +44,27 @@ Run it to **"ALL TESTS DONE"**, power off, pull `/Results.jsonl`, and diff:
 
 Built by `preboot/supervisor_bench/build_<bench>_<hda|dsk>.sh` from the
 captured corpora (`gen/{cpu,mmu,fpu}_tests.h`) with the Retro68
-`m68k-apple-macos-gcc -m68040` toolchain. **Boot-tested in MAME
-`macqd800`** with the real Quadra 800 ROM: all three boot on the 68040,
-the payload runs, and the **built-in DAFB 1 bpp display paints**
-(`ScrnBase=$F9001000`). The bench reads the row stride from the ROM's
-`ScrnRow`/`ScrnBase` globals at runtime, so it adapts to the Quadra's
-current resolution.
+`m68k-apple-macos-gcc -m68040` toolchain. The 8 bpp paint kernel was
+**verified by host-rendering** the bench screen through the exact same
+`display_1bpp.c` code (`-DDISPLAY_BPP8`): "SUPERVISOR CPU BENCH …" and the
+`run=/ok=/trap=` tally render as clean, legible white-on-black text at
+640×480×8 bpp. ScrnBase on the Quadra is `$F9001000` (DAFB VRAM); the byte
+stride (1024 for 640×480) is read from the ROM's `ScrnRow` ($0106) global
+at runtime.
 
-> **MAME caveat:** MAME's 68040 SCSI write-back doesn't persist
-> `/Results.jsonl` (a known emulator limitation — the disk boots and the
-> bench runs, but results read back empty *under MAME only*). On **real
-> hardware** the raw-sector `_Write` path persists results, as it did for
-> the predecessor Mac II / IIvi benches. The on-screen `run=/ok=/trap=`
-> tally is your live confirmation either way.
+> **Display history:** the first cut painted 1 bpp into the 8 bpp DAFB
+> framebuffer → garbled characters (one font byte became one 8 bpp pixel).
+> Fixed 2026-06-13 by painting one byte per pixel; hence the 640×480×256
+> requirement above.
+>
+> **Results write-back:** if `/Results.jsonl` reads back empty after a
+> run, the bench still tells you everything on screen — the live
+> `run=/ok=/trap=` tally and the final `ALL TESTS DONE` + `ioResult=`
+> line. Photograph the screen; that is the bench's primary readout (the
+> JSONL is a convenience). A non-zero `ioResult` means the SCSI `_Write`
+> path needs the boot-handoff refnum checked on this machine. (MAME's
+> 68040 also doesn't persist the write, so JSONL capture is hardware-only
+> regardless.)
 
 ## Notes
 

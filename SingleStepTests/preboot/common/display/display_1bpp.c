@@ -1,11 +1,13 @@
-/* display_1bpp.c — 1 bpp paint kernel for the framebuffer at ScrnBase
+/* display_1bpp.c — text paint kernel for the framebuffer at ScrnBase
  * ($0824). Row stride is per-VIDEO_VARIANT (see common/make/common.mk)
- * or runtime-detected from ScrnRow ($0106) in the `auto` build.
+ * or runtime-detected from ScrnRow ($0106) in the `auto`/`dafb` builds.
+ * Despite the file name it has both a 1 bpp and an 8 bpp paint path
+ * (the 8 bpp path is selected by -DDISPLAY_BPP8; see below).
  * Works on:
- *   - Macintosh Quadra 800 built-in DAFB II video. VRAM at CPU
- *     $F9000000; 1 bpp is DAFB mode 0 (MSB-first). The stride is
- *     software-programmed by the ROM for the sensed monitor, so this
- *     core uses the `auto` (ScrnRow $0106) path — see VIDEO_VARIANT=dafb.
+ *   - Macintosh Quadra 800 built-in DAFB II video (VRAM at CPU
+ *     $F9000000). The ROM boots it at 640x480 @ 8 bpp (256 colors), so
+ *     VIDEO_VARIANT=dafb builds the 8 bpp path with the runtime ScrnRow
+ *     stride. (VIDEO_VARIANT=dafb1 = 1 bpp, for a B&W screen.)
  *   - mdc824 / Toby NuBus cards in their power-on 1 bpp default (80)
  *   - m2hires in its power-on 1 bpp default (128)
  *   - Macintosh LC / LC II built-in V8 video (1024)
@@ -166,6 +168,50 @@ u32 display_row_bytes(void)
 u32 display_row_bytes(void) { return (u32)ROW_BYTES; }
 #endif
 
+#ifdef DISPLAY_BPP8
+/* ---- 8 bpp paint (Macintosh Quadra 800 built-in DAFB, 256 colors) ----
+ * The Quadra 800 ROM boots the built-in DAFB at 640x480 @ 8 bpp (the
+ * Apple 13"/14" 67 Hz mode), so each pixel is ONE byte, not one bit.
+ * `display_row_bytes()` returns the DAFB's byte stride (1024 for 640x480
+ * — 640 visible bytes + padding), read from ScrnRow ($0106) at runtime.
+ * Polarity: the default 8 bpp CLUT maps index 0 -> white, 255 -> black,
+ * so we wipe to 0xFF (black) and paint glyph strokes as 0x00 (white) —
+ * the same white-on-black look as the 1 bpp build. A glyph cell is
+ * 8x8 px = 8x8 bytes; each character column is 8 bytes wide. */
+void paint_glyph_at(u8 *fb_ptr, char c)
+{
+    int row, col;
+    const u8 *g;
+    u32 stride = display_row_bytes();
+    if ((u8)c < 0x20 || (u8)c > 0x7E) c = '?';
+    g = &g_font[((u8)c - 0x20) * 8];
+    for (row = 0; row < 8; row++) {
+        u8 bits = *g++;
+        u8 *line = fb_ptr + row * stride;
+        for (col = 0; col < 8; col++)
+            line[col] = (bits & (0x80 >> col)) ? 0x00 : 0xFF;  /* stroke=white */
+    }
+}
+
+/* Paint a string at (pixel-row, char-col). col_char is the character
+ * column (each glyph is 8 px = 8 bytes wide at 8 bpp). */
+void paint_string(u32 row, u32 col_char, const char *s, u32 max_chars)
+{
+    u32 fb = fb_base();
+    u8 *p;
+    u32 n;
+    if (!fb_ok(fb)) return;
+    p = (u8 *)fb + row * display_row_bytes() + col_char * 8;
+    for (n = 0; n < max_chars && *s; n++) {
+        paint_glyph_at(p, *s++);
+        p += 8;
+    }
+    for (; n < max_chars; n++) {
+        paint_glyph_at(p, ' ');
+        p += 8;
+    }
+}
+#else
 /* Paint one glyph at framebuffer byte ptr fb_ptr.
  * Inverts so 1-bits in font = 0 (white) on screen. */
 void paint_glyph_at(u8 *fb_ptr, char c)
@@ -200,6 +246,7 @@ void paint_string(u32 row, u32 col_byte, const char *s, u32 max_chars)
         p += 1;
     }
 }
+#endif /* DISPLAY_BPP8 */
 
 /* Fill `rows` framebuffer rows with 1bpp black (0xFF). Stride-aware
  * replacement for the old hardcoded 640x480 wipe. 480 rows is safe on
