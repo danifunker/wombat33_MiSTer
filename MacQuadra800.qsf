@@ -291,8 +291,8 @@ set_global_assignment -name FAMILY "Cyclone V"
 set_global_assignment -name CDF_FILE jtag.cdf
 set_global_assignment -name QIP_FILE sys/sys.qip
 set_global_assignment -name QIP_FILE rtl/pll.qip
-set_global_assignment -name SDC_FILE wombat33.sdc
-set_global_assignment -name SYSTEMVERILOG_FILE wombat33.sv
+set_global_assignment -name SDC_FILE MacQuadra800.sdc
+set_global_assignment -name SYSTEMVERILOG_FILE MacQuadra800.sv
 set_global_assignment -name QIP_FILE rtl/ap68040/rtl/ap040.qip
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wombat_cpu.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/wombat_bus32.sv
@@ -371,3 +371,8 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to SDIO_DAT[*]
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to SD_SPI*
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to USER_IO[*]
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to VGA_EN
+set_global_assignment -name VERILOG_FILE rtl/pll_video.v
+set_global_assignment -name VERILOG_FILE rtl/scc.v
+set_global_assignment -name VERILOG_FILE rtl/uart/txuart.v
+set_global_assignment -name VERILOG_FILE rtl/uart/rxuart.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram_beat32.sv

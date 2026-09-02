@@ -1,9 +1,9 @@
-# Building the Wombat33 core
+# Building the MacQuadra800 core
 
 There are two ways to build the FPGA core: the Quartus GUI, or the scripted CLI flow
 in `scripts/`. This document covers the **CLI flow** — repeatable, headless-friendly,
 and core-agnostic (the same `build_only.sh` works in other MiSTer core repos with no
-edits). For the GUI, just open `wombat33.qpf` in Quartus and run a full compilation.
+edits). For the GUI, just open `MacQuadra800.qpf` in Quartus and run a full compilation.
 
 The build **never touches the MiSTer** — deploying is a separate step (see
 [Deploy](#deploy-separate-step)).
@@ -58,11 +58,11 @@ hard). Run it in a terminal you can leave open, or as a background task.
 At the end `build_only.sh` prints a summary, for example:
 
 ```
-BUILD STATUS  (wombat33, 38m12s)
+BUILD STATUS  (MacQuadra800, 38m12s)
   Analysis & Synthesis   Analysis & Synthesis Status : Successful - ...
   Fitter                 Fitter Status : Successful - ...
   Timing (STA)           met — worst slack +0.441 ns
-  Artifact               output_files/wombat33.rbf  (4256376 bytes, ...)
+  Artifact               output_files/MacQuadra800.rbf  (4256376 bytes, ...)
   Quartus flow           exit=0
 ```
 
@@ -79,31 +79,31 @@ BUILD STATUS  (wombat33, 38m12s)
 This design sits close to the device ceiling, so two checks are worth doing after any
 A&S run that changes an array:
 
-- `wombat33.srf` suppresses RAM-inference messages wholesale (IDs `276020` / `276027`
+- `MacQuadra800.srf` suppresses RAM-inference messages wholesale (IDs `276020` / `276027`
   with a `*` wildcard). **Never trust the absence of an inference warning** — read the
   RAM Summary table instead:
 
   ```bash
-  i=$(grep -n "^; Analysis & Synthesis RAM Summary" output_files/wombat33.map.rpt | cut -d: -f1); sed -n "${i},$((i+45))p" output_files/wombat33.map.rpt
+  i=$(grep -n "^; Analysis & Synthesis RAM Summary" output_files/MacQuadra800.map.rpt | cut -d: -f1); sed -n "${i},$((i+45))p" output_files/MacQuadra800.map.rpt
   ```
 
   Every array must show `Type = M10K block` (or `AUTO`). An array that fell out to
   registers costs tens of thousands of ALMs — `Total registers` jumping back toward
   60 k is the tell (a healthy build is ~28-29 k).
 - `quartus_map` standalone skips the pre-flow script (`sys/sys.tcl`) that regenerates
-  `build_id.v`, which `wombat33.sv` includes. `--check` therefore builds against
+  `build_id.v`, which `MacQuadra800.sv` includes. `--check` therefore builds against
   whatever `build_id.v` is on disk; the full flow regenerates it.
 
 ## Deploy (separate step)
 
-Building produces `output_files/wombat33.rbf` but does not push it anywhere. To push the
+Building produces `output_files/MacQuadra800.rbf` but does not push it anywhere. To push the
 build to a MiSTer, reboot it, and select the core over the OSD:
 
 ```bash
 bash scripts/deploy_screenshot.sh
 ```
 
-It refuses to deploy if `wombat33.fit.summary` does not say `Successful`, then hands off
+It refuses to deploy if `MacQuadra800.fit.summary` does not say `Successful`, then hands off
 to `tools/misterdeploy/launch_unstable_core.py`: scp (md5-verified) into `_Unstable`,
 reboot for a clean menu, and blind-OSD navigation generated from the live menu listing.
 
@@ -112,16 +112,16 @@ data is never clobbered:
 
 | what | where | from |
 |---|---|---|
-| pristine 1 MB Quadra 800 ROM | `/media/fat/games/Wombat33/boot.rom` | `releases/quadra800.rom` |
-| SD slot 0 mount memory | `/media/fat/config/Wombat33.s0` | points at `games/Wombat33/QuadSquad8.hda` |
+| pristine 1 MB Quadra 800 ROM | `/media/fat/games/MacQuadra800/boot.rom` | `releases/quadra800.rom` |
+| SD slot 0 mount memory | `/media/fat/config/MacQuadra800.s0` | points at `games/MacQuadra800/QuadSquad8.hda` |
 
 See `tools/misterdeploy/README.md` for the launcher's full flag set.
 
-> **The slot-0 seed does nothing today.** `wombat33.sv`'s CONF_STR declares the disk
+> **The slot-0 seed does nothing today.** `MacQuadra800.sv`'s CONF_STR declares the disk
 > as `"S0,HDAVHD,Mount SCSI disk;"`. In MiSTer's option parser the letter after `S`
 > is a flag: `SC0` sets `store_name`, which is what makes the Main write and later
 > restore `config/<core>.s<N>`. A plain `S0` mounts identically when you pick a file
-> in the OSD, but the mount is never remembered — so `Wombat33.s0` is written by the
+> in the OSD, but the mount is never remembered — so `MacQuadra800.s0` is written by the
 > deploy and then ignored, and the disk must be mounted by hand every boot. Every
 > sibling core (`MacLC`, `MacLCII`, `MacIIvi`, `MacPlus`, `LBMacTwo`) uses `SC0`.
 > Changing `S0` → `SC0` needs a full rebuild; until then, mount from the OSD.
@@ -141,7 +141,7 @@ bash scripts/push_disk.sh "/path/to/HD00 512 Quad Squad with 8.hda" QuadSquad8.h
 ```
 
 It scps the image into the core's games folder, md5-verifies both ends, and then takes
-a gzip backup under `games/Wombat33/backup/`. The order is deliberate: verify **before**
+a gzip backup under `games/MacQuadra800/backup/`. The order is deliberate: verify **before**
 backing up (a corrupt transfer must not become the backup), and back up **before the
 first boot** — once the core mounts the image read-write there is no pristine copy left.
 It refuses to overwrite an image already on the MiSTer, since that one may hold a booted
@@ -150,7 +150,7 @@ system's writes.
 Roll back on the MiSTer with:
 
 ```bash
-gzip -dc /media/fat/games/Wombat33/backup/QuadSquad8.hda.gz > /media/fat/games/Wombat33/QuadSquad8.hda
+gzip -dc /media/fat/games/MacQuadra800/backup/QuadSquad8.hda.gz > /media/fat/games/MacQuadra800/QuadSquad8.hda
 ```
 
 The image was originally pushed from `HD00 512 Quad Squad with 8.hda` in
@@ -164,7 +164,7 @@ The live base is now:
 
 | | |
 |---|---|
-| path | `/media/fat/games/Wombat33/QuadSquad8.hda` |
+| path | `/media/fat/games/MacQuadra800/QuadSquad8.hda` |
 | size | 2,146,461,696 bytes (unchanged -- same geometry, same partition map) |
 | md5 | `1a40aa8a77af35cabfe76d4dea9ccf13` — measured after a clean shutdown, see below |
 | pristine backup | `backup/QuadSquad8.hda.gz`, 342,339,344 bytes, taken 2026-08-31 17:27 from the quiesced image. **Restore-verified**: `gzip -t` passes and it decompresses to the same `1a40aa8a...` |
@@ -204,7 +204,7 @@ the authoritative base from here on.
 
 If you point the mount at a different filename, change `SEED_MOUNT_REL` in
 `scripts/local.env` to match — or just remount from the OSD (`Mount SCSI disk`), which
-rewrites `config/Wombat33.s0` itself.
+rewrites `config/MacQuadra800.s0` itself.
 
 ## Testing on hardware
 
@@ -225,7 +225,7 @@ The pre-hardware gate is the Verilator testbench in `verilator/` — see
 - **The same core twice at once — don't.** Both compiles share `db/`, `incremental_db/`,
   and `output_files/`, so they would corrupt each other. `build_only.sh` prevents this:
   the second invocation waits (30 s poll) until the first Quartus finishes.
-- **Two *different* cores** (e.g. wombat33 and MacLC, in separate repo directories):
+- **Two *different* cores** (e.g. MacQuadra800 and MacLC, in separate repo directories):
   Quartus *can* build them in parallel — they share no working state, and Lite has no
   concurrency license lock. **But** `build_only.sh`'s wait-gate is host-global (it matches
   *any* running `quartus_*` process), so by default the second build **waits** and they run

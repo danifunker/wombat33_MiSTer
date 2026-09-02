@@ -3,7 +3,7 @@
 A MiSTer FPGA core for the Apple **Macintosh Quadra 800** (codename
 *Wombat*): MC68040 @ 33 MHz, djMEMC memory controller with integrated
 DAFB II built-in video, IOSB I/O. The repository holds the RTL core
-(`wombat33.sv` + `rtl/`), the Verilator testbench it is brought up
+(`MacQuadra800.sv` + `rtl/`), the Verilator testbench it is brought up
 against (`verilator/`), and the **verification testbench suite**
 (`SingleStepTests/`) that gates the CPU against MAME and real hardware.
 
@@ -15,11 +15,11 @@ status summary, push-and-launch on a MiSTer, screenshot grabs).
 ```sh
 bash scripts/setup_env.sh           # once per machine: creates scripts/local.env
 bash scripts/build_only.sh --check  # ~4 min Analysis & Synthesis sanity check
-bash scripts/build_only.sh          # full compile -> output_files/wombat33.rbf
+bash scripts/build_only.sh          # full compile -> output_files/MacQuadra800.rbf
 bash scripts/deploy_screenshot.sh   # push + seed boot.rom/SCSI mount + launch
 ```
 
-The core mounts its boot ROM from `games/Wombat33/boot.rom` and its main
+The core mounts its boot ROM from `games/MacQuadra800/boot.rom` and its main
 SCSI disk from OSD slot `S0`; `BUILD.md` covers seeding both.
 
 ## Testbench (`SingleStepTests/`)

@@ -84,7 +84,7 @@ reg [1:0] ram_cfg = 2'd0;
 initial if (!$value$plusargs("ram=%d", ram_cfg)) ram_cfg = 2'd0;
 localparam RAM_WORDS  = 1 << (RAM_ADDR_BITS-2);
 localparam ROM_WORDS  = 262144;                // 1 MB
-// VRAM mirrors wombat33.sv exactly: 308 KB backed, with the 204 KB fold
+// VRAM mirrors MacQuadra800.sv exactly: 308 KB backed, with the 204 KB fold
 // that makes the unbacked 308K..512K window alias downward.  It used to be
 // a flat 1 MB with no fold, so the fold had NEVER executed in sim and
 // hardware-only video corruption was invisible here (RESUME-disk-gate.md

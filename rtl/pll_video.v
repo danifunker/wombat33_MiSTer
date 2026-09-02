@@ -3,7 +3,7 @@
 // Ported verbatim from MacLC_MiSTer/rtl/pll_video.v, minus the runtime
 // reconfiguration: wombat33 has one monitor mode (13" 640x480), so the static
 // C0=28 config is the only one it ever needs and the reconfig interface is
-// tied off at the instantiation in wombat33.sv.
+// tied off at the instantiation in MacQuadra800.sv.
 //
 // WHY IT EXISTS. The DAFB used to scan out on clk_sys, so 640x480 in an
 // 800x525 frame refreshed at 33 MHz / (800*525) = 78.6 Hz, with a 33 MHz dot

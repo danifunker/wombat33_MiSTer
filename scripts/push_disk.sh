@@ -37,7 +37,7 @@ SRC="${1:?usage: push_disk.sh <local-image> [remote-name]  (try --help)}"
 : "${MISTER_HOST:?set MISTER_HOST in scripts/local.env}"
 : "${MISTER_SSH_KEY:?set MISTER_SSH_KEY in scripts/local.env}"
 : "${MISTER_SSH_USER:=root}"
-: "${SEED_REMOTE:=/media/fat/games/Wombat33/boot.rom}"
+: "${SEED_REMOTE:=/media/fat/games/MacQuadra800/boot.rom}"
 GAMES_DIR="$(dirname "$SEED_REMOTE")"
 
 DST_NAME="${2:-$(basename "$SRC" | tr -d ' ')}"

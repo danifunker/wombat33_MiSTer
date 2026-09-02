@@ -10,7 +10,7 @@ code and guessing at it.
     python3 scripts/aux_dis.py unix.bin boardinit --raw    # show opcode bytes
 
 Ranges given as a symbol name run to the next symbol.  Hardware addresses
-that the Wombat33 core decodes are called out inline.
+that the MacQuadra800 core decodes are called out inline.
 """
 
 import struct

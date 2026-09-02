@@ -1,6 +1,6 @@
 # report-timing.tcl — dump the worst timing paths from an EXISTING compile.
 #
-# The default compile flow's wombat33.sta.rpt carries only per-clock slack
+# The default compile flow's MacQuadra800.sta.rpt carries only per-clock slack
 # summaries; the "Timing Closure Recommendations" panel that would name the
 # failing path is HTML-only and does not survive the plain-text export.  This
 # re-runs the timing analyzer against the netlist already in db/ — no fit, no
@@ -11,7 +11,7 @@
 #
 # Writes output_files/timing_worst.rpt and echoes the same to the console.
 
-set rev wombat33
+set rev MacQuadra800
 if {[llength $quartus(args)] > 0} { set rev [lindex $quartus(args) 0] }
 
 project_open $rev -revision $rev

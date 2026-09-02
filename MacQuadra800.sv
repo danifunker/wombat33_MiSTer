@@ -1,5 +1,5 @@
 //============================================================================
-//  wombat33 — MiSTer top for the Quadra 800 machine.
+//  MacQuadra800 — MiSTer top for the Quadra 800 machine.
 //
 //  Platform memory contract (see rtl/quadra800.sv and verilator/sim.v):
 //  one ack-based beat port with mem_memsel (0 RAM, 1 ROM, 2 VRAM) plus a
@@ -64,10 +64,10 @@ localparam CONF_STR = {
 	// reaches 31250 through its own WR11/TRxC path (rtl/scc.v); the token is
 	// what makes the Main offer the MIDI mode, and the mode it reports back in
 	// uart_mode is what gates the user-port MIDI-in merge on serialIn below.
-	"Wombat33;UART57600:115200,MIDI;",
+	"MacQuadra800;UART57600:115200,MIDI;",
 	// SC0, not S0: the letter after S is a flag, and 'C' is what sets
 	// store_name in the Main's option parser -- i.e. what makes MiSTer write
-	// config/Wombat33.s0 and re-mount the image on the next core start. With a
+	// config/MacQuadra800.s0 and re-mount the image on the next core start. With a
 	// plain S0 the mount works but is forgotten every boot, so the disk had to
 	// be picked from the OSD by hand each time and the deploy's slot-0 seed was
 	// inert. Every sibling Mac core (MacLC, MacLCII, MacIIvi, MacPlus,
@@ -654,7 +654,7 @@ end
 
 // port B: DAFB scanout, on the PIXEL clock.  M10K is natively dual-clock, so
 // this costs nothing and there is no timed arc between the ports -- the
-// crossing is blessed in wombat33.sdc along with the rest of clk_vid.
+// crossing is blessed in MacQuadra800.sdc along with the rest of clk_vid.
 always @(posedge clk_vid)
 	vid_rdata <= {vram3[vb_addr], vram2[vb_addr],
 	              vram1[vb_addr], vram0[vb_addr]};

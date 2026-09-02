@@ -14,7 +14,7 @@ derive_clock_uncertainty
 # exactly this (MacLC.sdc:78) and the fix is the same as pll_hdmi/pll_audio.
 #
 # The deliberate clk_sys <-> clk_vid crossings this blesses are safe by
-# construction: (a) dual-clock M10Ks (the VRAM read port in wombat33.sv — no
+# construction: (a) dual-clock M10Ks (the VRAM read port in MacQuadra800.sv — no
 # timed cross-port arc), (b) 2FF *_meta synchronizers (fb_base/stride/mode into
 # the scanout, the video-domain reset, and the VBL toggle back into clk_sys),
 # and (c) vid_stride into the VRAM address mapper, which BOTH ports have to

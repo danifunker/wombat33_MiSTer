@@ -52,7 +52,7 @@ bool single_step = 0;
 bool multi_step = 0;
 int  multi_step_amount = 1024;
 
-// Core options (mirrors the CONF_STR options in wombat33.sv)
+// Core options (mirrors the CONF_STR options in MacQuadra800.sv)
 int opt_tvmode = 0;      // 0 NTSC, 1 PAL
 int opt_noise = 0;       // 0 white, 1 red, 2 green, 3 blue
 

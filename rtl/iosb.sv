@@ -559,7 +559,7 @@ ncr53c96 #(.DISK_ID(0)) scsi (
 //
 //   *** DEBUG ONLY.  COMPILED OUT UNLESS `SCSI_TRACE` IS DEFINED. ***
 //
-// Enable it by uncommenting the VERILOG_MACRO line in wombat33.qsf; the build
+// Enable it by uncommenting the VERILOG_MACRO line in MacQuadra800.qsf; the build
 // script then prints a DEBUG BUILD banner so a traced bitstream cannot be
 // mistaken for a release one.  When enabled this takes over the guest's modem
 // port outright (scc_txd_a below), so it must never ship.

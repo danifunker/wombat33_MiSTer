@@ -34,14 +34,14 @@ downloader re-populating `_Unstable` simply recomputes on the next run.
 
 ```bash
 # Launch a core already on the MiSTer (host/port from env MISTER_HOST/MISTER_HTTP_PORT):
-python launch_unstable_core.py --core wombat33.rbf
+python launch_unstable_core.py --core MacQuadra800.rbf
 
 # Push a fresh build, then launch it (explicit host + ssh key):
 python launch_unstable_core.py --host 192.168.1.50 --ssh-key ~/.ssh/mister \
-    --push ./output_files/wombat33.rbf --core wombat33.rbf
+    --push ./output_files/MacQuadra800.rbf --core MacQuadra800.rbf
 
 # Preview the generated keystrokes without touching anything:
-python launch_unstable_core.py --core wombat33.rbf --dry-run
+python launch_unstable_core.py --core MacQuadra800.rbf --dry-run
 ```
 
 ### Options (all machine config is a flag or env var)
@@ -66,7 +66,7 @@ python launch_unstable_core.py --core wombat33.rbf --dry-run
 | `--seed-file FILE` | — | off | local file to seed a save image, **create-only-if-missing** |
 | `--seed-remote PATH` | — | — | absolute remote path for `--seed-file` |
 | `--seed-mount-cfg PATH` | — | — | absolute remote `.s<N>` mount-memory file to create-if-missing |
-| `--seed-mount-rel REL` | — | — | relative path stored in the `.s<N>` file (e.g. `games/Wombat33/QuadSquad8.hda`) |
+| `--seed-mount-rel REL` | — | — | relative path stored in the `.s<N>` file (e.g. `games/MacQuadra800/QuadSquad8.hda`) |
 | `--seed-mount-size N` | — | `1024` | size of the `.s<N>` file (NUL-padded; MiSTer uses 1024) |
 
 **Seeding a save image / disk mount (zero-touch).** `--seed-*` drops a default save file and

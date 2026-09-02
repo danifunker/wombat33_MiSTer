@@ -2,7 +2,7 @@
 //  sdram_beat32 — 32-bit machine beats on the 16-bit MiSTer SDRAM controller.
 //
 //  Wraps rtl/sdram.sv (Sorgelig's, from NeoGeo_MiSTer) and the clk_sys <->
-//  clk_ram handshake that used to live inline in wombat33.sv.  Two things
+//  clk_ram handshake that used to live inline in MacQuadra800.sv.  Two things
 //  here that the plain two-access bridge did not do:
 //
 //  * A READ IS ONE ROW CYCLE, NOT TWO.  The controller's mode register

@@ -31,12 +31,12 @@ fi
 : "${RBF_NAME:=$REV.rbf}"
 
 # Seeding — `=` (not `:=`) so an explicit empty SEED_FILE in local.env disables it.
-# Defaults reproduce the Wombat33 layout: the pristine 1 MB Quadra 800 ROM lands as
-# games/Wombat33/boot.rom, and SD slot 0 is pre-mounted to the main SCSI disk image.
+# Defaults reproduce the MacQuadra800 layout: the pristine 1 MB Quadra 800 ROM lands as
+# games/MacQuadra800/boot.rom, and SD slot 0 is pre-mounted to the main SCSI disk image.
 : "${SEED_FILE=releases/quadra800.rom}"
-: "${SEED_REMOTE=/media/fat/games/Wombat33/boot.rom}"
-: "${SEED_MOUNT_CFG=/media/fat/config/Wombat33.s0}"
-: "${SEED_MOUNT_REL=games/Wombat33/QuadSquad8.hda}"
+: "${SEED_REMOTE=/media/fat/games/MacQuadra800/boot.rom}"
+: "${SEED_MOUNT_CFG=/media/fat/config/MacQuadra800.s0}"
+: "${SEED_MOUNT_REL=games/MacQuadra800/QuadSquad8.hda}"
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 

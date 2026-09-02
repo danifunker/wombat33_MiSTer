@@ -75,17 +75,38 @@ priority.
    guest-menu op; the walkers are unreliable on QuadSquad8's busy wallpaper
    because cursor-find fails). If it wedges again at idle with clean input →
    real regression; if not → my tooling caused it and MacOS passes.
-5. ⬜ **If A/UX + MacOS both pass, commit + cut a release — use yesterday's date
-   (2026-09-01).** Releases live in `releases/` as `wombat33_YYYYMMDD.rbf` plus
-   the `.fit.summary` / `.sta.summary` (see the existing `releases/` files and
-   `releases/README.md` for the convention).
-6. ⬜ **Rename the core `wombat33` → `MacQuadra800`.** Do **NOT** rename the git
-   repo (user will do that later). Rename everything else and make the core look
-   in a new **`MacQuadra800`** folder on the MiSTer. Then rebuild, test on BOTH
-   A/UX and MacOS 8.1, commit again, and cut *another* release under the new
-   name. Rename checklist in §"Step 6" below.
-7. ⬜ **Report any issues** as they come up. (This resume exists partly because
-   step 3 hit one.)
+5. ✅ **Cut the release — committed as `25dc453`.** The tested build
+   (`70716e92`, +0.130 ns, both OSes pass) is `releases/wombat33_20260902.rbf`
+   with a README row + section and its (gitignored) `.fit`/`.sta` summaries.
+   **Named 20260902, not 20260901** (user's call when the 09-01 name turned out
+   to already hold a *different* seed-13 backup, `abb5ede4`; the tested build
+   was fit today and carries today's ncr53c96 data-out fix, so the work-date
+   convention put it on 09-02). The 09-01 backup is left untouched.
+6. 🔄 **Rename `wombat33` → `MacQuadra800` — IN PROGRESS.** Done so far:
+   git-mv of the five project files (`.qpf/.qsf/.sdc/.sv/.srf`); internal
+   ref edits (`PROJECT_REVISION`, `files.qip`, `jtag.cdf` sof, qsf SDC/SV,
+   CONF_STR `"MacQuadra800;…"`, the `.s0` comment, `report-timing.tcl` rev);
+   stale file-path comments in `rtl/*`, `verilator/*`, and the two top-level
+   files; build/deploy scripts (`deploy_screenshot.sh` defaults, `push_disk.sh`,
+   `local.env` **and** `local.env.sample`); docs (`BUILD.md`, `README.md` —
+   repo-name `wombat33_MiSTer` deliberately kept —, `tools/misterdeploy/README.md`
+   command examples). **MiSTer side moved:** `games/Wombat33`→`games/MacQuadra800`
+   (all disks + boot.rom + backup), and `config/MacQuadra800.s0` rewritten to
+   `games/MacQuadra800/QuadSquad8.hda` (old `Wombat33.s0` removed). **A&S check
+   passed (0 errors); full fit running.** LEFT INTENTIONALLY UNCHANGED: the
+   `emu`/`sys_top` module names (framework contract), the `wombat_cpu`/`wombat_bus`
+   internal modules (different codename, not `wombat33`), the `wombat33_MiSTer`
+   repo dir, `~/wombat33` WSL scratch paths in `sim_wsl.sh`, historical prose in
+   RESUME-*/docs/scsi, and the sorting-illustration example in the launcher
+   README. REMAINING: after the fit, deploy the new core, retest BOTH A/UX and
+   MacOS 8.1 from `games/MacQuadra800/`, commit the rename, and cut a release
+   under the new name (`MacQuadra800_YYYYMMDD.rbf`). **local.env is gitignored —
+   the user's copy was edited here, but note it if the machine changes.** Then
+   the user plans to merge CPU/architecture fixes from another fork, so land the
+   rename as a clean committed base.
+7. 🔄 **Report any issues** as they come up. Two stability scares this session
+   (A/UX 08:02 "hang", MacOS "wedge") both traced to test-harness/measurement
+   artifacts, NOT the build — see steps 3–4. The build is solid on both OSes.
 
 ---
 
