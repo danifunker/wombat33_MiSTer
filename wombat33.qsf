@@ -110,6 +110,20 @@ set_global_assignment -name SEED 13
 # disable adaptive scanline filtering
 #set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ADAPTIVE=1"
 
+# ============================================================================
+# DEBUG ONLY -- SCSI protocol tracer in rtl/iosb.sv.
+#
+# Uncomment to stream every first-sighting SCSI register value, bus fault and
+# stray I/O address out the modem port as ASCII, readable on the MiSTer with
+#     stty -F /dev/ttyS1 115200 raw -echo && cat /dev/ttyS1
+# (scripts/scsi_trace.sh does deploy + capture + decode in one go).
+#
+# This TAKES OVER the guest's serial port -- the SCC no longer reaches the pin.
+# Never ship a bitstream built with this on.  scripts/build_only.sh detects the
+# line below and prints a DEBUG BUILD banner so it cannot pass unnoticed.
+# ============================================================================
+set_global_assignment -name VERILOG_MACRO "SCSI_TRACE=1"
+
 #use only 1MB per frame for scaler to free ~21MB DDR3 RAM
 #set_global_assignment -name VERILOG_MACRO "MISTER_SMALL_VBUF=1"
 

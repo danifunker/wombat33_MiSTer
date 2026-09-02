@@ -95,6 +95,17 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 LOG="output_files/build_${STAMP}.log"
 
 # ------------------------------------------------------------------ compile
+# The SCSI tracer in rtl/iosb.sv is gated on a VERILOG_MACRO in the .qsf. When it
+# is on this is a DEBUG build: the tracer takes over the guest serial port, so
+# such a bitstream must never be released. Say so loudly at BOTH ends of the
+# build rather than leaving it for whoever reads the log to notice.
+TRACE_ON=0
+if grep -qE '^[[:space:]]*set_global_assignment -name VERILOG_MACRO "SCSI_TRACE=' "$REV.qsf" 2>/dev/null; then
+    TRACE_ON=1
+    log "*** DEBUG BUILD: SCSI_TRACE is ENABLED in $REV.qsf ***"
+    log "    The tracer takes over the guest serial port. Do not release this build."
+fi
+
 touch output_files/.compile_in_progress
 if [ "$CHECK_ONLY" = 1 ]; then
     log "Analysis & Synthesis only (quartus_map $REV) — fast syntax/multi-driver check" | tee -a "$LOG"
@@ -135,6 +146,10 @@ hr="------------------------------------------------------------"
 echo ""              | tee -a "$LOG"
 echo "$hr"           | tee -a "$LOG"
 printf 'BUILD STATUS  (%s, %dm%02ds)\n' "$REV" $((DUR/60)) $((DUR%60)) | tee -a "$LOG"
+if [ "${TRACE_ON:-0}" = 1 ]; then
+    printf '  *** DEBUG BUILD -- SCSI_TRACE on, guest serial port hijacked, DO NOT RELEASE ***
+' | tee -a "$LOG"
+fi
 echo "$hr"           | tee -a "$LOG"
 {
     stage_status "Analysis & Synthesis" "$REV.map.summary"

@@ -257,7 +257,11 @@ iosb iosb (
 
 	.ps2_key(ps2_key),
 	.ps2_mouse(ps2_mouse),
-	.timestamp(timestamp)
+	.timestamp(timestamp),
+
+	// DEBUG: fault channel for the SCSI trace in iosb.sv
+	.berr_active(svc == S_BERR),
+	.berr_addr(svc_addr)
 );
 
 //----------------------------------------------------------------------------

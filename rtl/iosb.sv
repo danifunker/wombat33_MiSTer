@@ -86,7 +86,12 @@ module iosb
 	input  [24:0] ps2_mouse,
 
 	// Unix seconds from the HPS, straight through to the RTC
-	input  [32:0] timestamp
+	input  [32:0] timestamp,
+
+	// DEBUG: the bus adapter's fault channel, so the SCSI trace below can
+	// report WHERE a driver went when it did not reach this chip.
+	input         berr_active,
+	input  [31:2] berr_addr
 );
 
 //----------------------------------------------------------------------------
@@ -438,10 +443,26 @@ reg vbl_d, scsi_d, drq_d, asc_d, slot_d;
 // (46 ms) and stops.
 wire asc_irq_i = asc_irq | easc_irq;
 wire easc_irq;
-wire via2_active = |(via2_ifr[6:0] & via2_ier[6:0] & 7'h1b);
-wire [7:0] via2_ifr_r = {via2_active, via2_ifr[6:0]};
 wire scsi_irq_i = scsi_irq | ncr_irq;
 wire scsi_drq_i = scsi_drq | ncr_drq;
+wire via2_active = |(via2_ifr[6:0] & via2_ier[6:0] & 7'h1b);
+// Bit 0 (SCSI DREQ) reads as a LIVE LEVEL, not as the latched flag.
+//
+// On this machine DREQ is not an interrupt source that anyone acknowledges;
+// it is a status line drivers spin on.  The Quadra 800 ROM polls it at
+// $408D1988 / $408D1FA8 and never writes it back, and A/UX's c94 PDMA loop
+// does the same -- read the IFR long, mask, spin up to a million times
+// (docs/scsi/aux-c94-driver.md).  QEMU patched mac_via for exactly this,
+// presenting the bit live rather than latched.
+//
+// The latched copy below still follows the level, but an IFR write-1-to-clear
+// (bit 0 is inside the $1b mask) would knock it down while DRQ was still
+// asserted, and the edge-detect can only put it back when DRQ CHANGES -- so a
+// driver that acknowledges the whole IFR word mid-transfer would spin its
+// DREQ poll out and give up.  rtl-gap-analysis.md item 11 asked for this to
+// be verified; it was reachable.  The latched bit is left driving via2_active
+// so interrupt behaviour is untouched.
+wire [7:0] via2_ifr_r = {via2_active, via2_ifr[6:1], scsi_drq_i};
 
 //----------------------------------------------------------------------------
 // IOSB config registers: 16-bit scratch at 256-byte strides, readback only
@@ -534,6 +555,351 @@ ncr53c96 #(.DISK_ID(0)) scsi (
 );
 
 //----------------------------------------------------------------------------
+// SCSI protocol trace, out the serial port.
+//
+//   *** DEBUG ONLY.  COMPILED OUT UNLESS `SCSI_TRACE` IS DEFINED. ***
+//
+// Enable it by uncommenting the VERILOG_MACRO line in wombat33.qsf; the build
+// script then prints a DEBUG BUILD banner so a traced bitstream cannot be
+// mistaken for a release one.  When enabled this takes over the guest's modem
+// port outright (scc_txd_a below), so it must never ship.
+//
+// The Quadra 800 ROM drives this chip by POLLING, so every hardware problem it
+// can have shows up as a visible hang.  A/UX's c94 driver instead uses the
+// interrupt line, the sequence-step register and the MESSAGE phases, none of
+// which the ROM ever touches — so when A/UX fails there is no surface to look
+// at at all, only "Protocol Error Processing SCSI request", which is its
+// catch-all default (docs/scsi/aux-c94-driver.md).
+//
+// This gives it a surface.  From the moment a BARE (non-DMA-bit) select or a
+// SET ATN is written — commands only a Unix driver issues, never the ROM —
+// every SCSI register access and every interrupt/DREQ edge is streamed as
+// ASCII out UART_TXD, which the MiSTer exposes as /dev/ttyS1:
+//
+//     stty -F /dev/ttyS1 115200 raw -echo && cat /dev/ttyS1 > trace.txt
+//
+// One 4-character record per event: tag, two hex digits, a space.
+//   =AA armed        C cmd write     F FIFO write    S SELID write
+//   L/M count write  w other write   r INTR read     f FIFO read
+//   s STEP read      t STATUS read (on change)       g FIFO-flags (on change)
+//   I irq edge       q DREQ edge
+// Bulk PDMA beats are deliberately NOT traced — they would swamp the link and
+// the DREQ edges carry the same information.  DBG_BUDGET stops the stream so
+// the first failure is not pushed out by whatever the driver does next.
+//----------------------------------------------------------------------------
+// The SCC's own transmit line.  Which of it and the tracer reaches the pin is
+// decided at the bottom of this block.
+wire scc_txd_int;
+
+`ifdef SCSI_TRACE
+
+localparam integer DBG_BAUD_DIV = 33_000_000 / 115200;   // 286
+localparam integer DBG_BUDGET   = 4000;
+// Dedup EPOCH, in heartbeats (~1 s each).  First sightings used to be scoped to
+// the whole session, which quietly destroyed the one measurement that mattered:
+// A/UX Startup drives the disk through the ROM's SCSI Manager, so every command
+// it can produce was already marked seen during the Mac OS boot, and its entire
+// boot attempt showed up as silence.  Clearing the tables every epoch makes each
+// epoch report what is in use *then*, at a few tens of records per epoch.
+localparam integer DBG_EPOCH_HB = 8;
+
+reg         dbg_armed;
+reg  [11:0] dbg_left;
+reg   [3:0] dbg_hb_cnt;            // heartbeats into the current epoch
+reg   [7:0] dbg_epoch;             // epoch number, reported by the "E" record
+reg         dbg_epoch_clr;         // registered one-shot: wipe the seen tables
+reg  [15:0] dbg_q [0:63];
+reg   [5:0] dbg_wp, dbg_rp;
+wire        dbg_qempty = (dbg_wp == dbg_rp);
+wire        dbg_qfull  = ((dbg_wp + 6'd1) == dbg_rp);
+
+// heartbeat before arming, so that a silent port can be told apart from a
+// working port that simply never saw a Unix-dialect command
+reg  [24:0] dbg_hb;
+wire        dbg_hb_tick = (dbg_hb == 25'd0);
+// Bus faults are traced unconditionally (they need no arming) but DEDUPED by
+// address, so the handful of distinct addresses a probe touches is legible
+// instead of a storm of repeats.
+reg         dbg_be_d;
+reg  [15:0] dbg_be_last;
+reg         dbg_be_p1, dbg_be_p2;
+reg   [7:0] dbg_be_v1, dbg_be_v2;
+reg         dbg_lo_p;              // second half of a probe address
+reg   [7:0] dbg_lo_v;
+
+// FIRST-SIGHTING-PER-EPOCH event generation.  Streaming every access is
+// useless: the ROM's own traffic bursts faster than a 115200 link can drain,
+// so a short A/UX burst could be dropped on a full queue and its absence would
+// prove nothing.  Emitting only the first sighting of each distinct value
+// bounds the stream -- but scoping "first" to the whole session was worse than
+// useless.  It made a whole A/UX boot attempt look like silence, and that
+// silence was read as "A/UX never touches the chip", which sent an entire
+// session chasing a machine-identity theory.  A/UX Startup is a Mac
+// application: it drives the disk through the ROM's SCSI Manager, so it can
+// only ever produce commands the ROM already produced while booting Mac OS.
+// See docs/scsi/aux-startup-boot-path.md.  So "first" is now scoped to an
+// EPOCH (DBG_EPOCH_HB heartbeats), and every epoch re-reports what is in use.
+// High-volume, low-information channels (FIFO data, TC loads, DREQ edges) are
+// still dropped entirely.
+reg [255:0] seen_cmd;              // command bytes written to r3
+reg [255:0] seen_intr;             // values read back from r5
+reg [255:0] seen_stat;             // values read back from r4
+reg  [15:0] seen_selid;            // target ids written to r4
+reg [255:0] seen_und;              // 16-byte-strided pages outside the window
+reg  [12:0] seen_reg;              // first write to each of r5..rC
+reg [255:0] seen_fifo;             // FIFO-flags values read from r7
+reg  [15:0] seen_step;             // sequence-step values read from r6
+
+reg   [7:0] dbg_tag, dbg_val;
+reg         dbg_ev;
+always @(*) begin
+	dbg_ev  = 1'b0;
+	dbg_tag = 8'h00;
+	dbg_val = 8'h00;
+	if (scsi_strobe && write) begin
+		dbg_val = wbyte;
+		case (addr[7:4])
+		4'h3: begin dbg_ev = !seen_cmd[wbyte];        dbg_tag = "C"; end
+		4'h4: begin dbg_ev = !seen_selid[wbyte[3:0]]; dbg_tag = "S"; end
+		4'h5: begin dbg_ev = !seen_reg[0];  dbg_tag = "T"; end   // sel timeout
+		4'h6: begin dbg_ev = !seen_reg[1];  dbg_tag = "P"; end   // sync period
+		4'h7: begin dbg_ev = !seen_reg[2];  dbg_tag = "O"; end   // sync offset
+		4'h8: begin dbg_ev = !seen_reg[3];  dbg_tag = "1"; end   // CONFIG1
+		4'h9: begin dbg_ev = !seen_reg[4];  dbg_tag = "K"; end   // clock conv
+		4'hA: begin dbg_ev = !seen_reg[5];  dbg_tag = "X"; end   // test
+		4'hB: begin dbg_ev = !seen_reg[6];  dbg_tag = "2"; end   // CONFIG2
+		4'hC: begin dbg_ev = !seen_reg[7];  dbg_tag = "3"; end   // CONFIG3
+		default: ;                                                // r0/r1/r2: noise
+		endcase
+	end
+	else if (scsi_strobe && !write) begin
+		dbg_val = ncr_rdata;
+		case (addr[7:4])
+		4'h5: begin dbg_ev = !seen_intr[ncr_rdata]; dbg_tag = "r"; end
+		4'h4: begin dbg_ev = !seen_stat[ncr_rdata]; dbg_tag = "t"; end
+		// FIFO flags and sequence step: both drivers read these to decide
+		// whether a transfer actually happened, so they are the state to
+		// have alongside a command byte, not high-volume noise.
+		4'h7: begin dbg_ev = !seen_fifo[ncr_rdata]; dbg_tag = "f"; end
+		4'h6: begin dbg_ev = !seen_step[ncr_rdata[3:0]]; dbg_tag = "s"; end
+		default: ;
+		endcase
+	end
+	else if (dbg_undec && !seen_und[addr[23:16]]) begin
+		dbg_ev  = 1'b1;
+		dbg_tag = write ? "U" : "u";
+		dbg_val = addr[23:16];
+	end
+end
+
+// mark a value as seen once its record is safely queued
+always @(posedge clk) begin
+	if (!nreset) begin
+		seen_cmd <= 0; seen_intr <= 0; seen_stat <= 0;
+		seen_selid <= 0; seen_und <= 0; seen_reg <= 0;
+		seen_fifo <= 0; seen_step <= 0;
+	end
+	// End of a dedup epoch.  Cleared HERE rather than in the block that owns
+	// dbg_epoch_clr, so each seen_* net keeps exactly one driver -- Verilator
+	// waves a second one through under -Wno-MULTIDRIVEN, Quartus does not
+	// (Error 10028).
+	else if (dbg_epoch_clr) begin
+		seen_cmd <= 0; seen_intr <= 0; seen_stat <= 0;
+		seen_selid <= 0; seen_und <= 0; seen_reg <= 0;
+		seen_fifo <= 0; seen_step <= 0;
+	end
+	else if (dbg_ev && !dbg_qfull) begin
+		case (dbg_tag)
+		"C": seen_cmd[dbg_val]     <= 1'b1;
+		"S": seen_selid[dbg_val[3:0]] <= 1'b1;
+		"r": seen_intr[dbg_val]    <= 1'b1;
+		"t": seen_stat[dbg_val]    <= 1'b1;
+		"f": seen_fifo[dbg_val]    <= 1'b1;
+		"s": seen_step[dbg_val[3:0]] <= 1'b1;
+		"U", "u": seen_und[dbg_val] <= 1'b1;
+		"T": seen_reg[0] <= 1'b1;
+		"P": seen_reg[1] <= 1'b1;
+		"O": seen_reg[2] <= 1'b1;
+		"1": seen_reg[3] <= 1'b1;
+		"K": seen_reg[4] <= 1'b1;
+		"X": seen_reg[5] <= 1'b1;
+		"2": seen_reg[6] <= 1'b1;
+		"3": seen_reg[7] <= 1'b1;
+		default: ;
+		endcase
+	end
+end
+
+// arm on a command byte only a Unix driver writes: bare $41/$42/$43/$46 select
+// (the ROM always sets the DMA bit) or $1A SET ATN (the ROM never sends one)
+wire dbg_arm_cmd = scsi_strobe && write && (addr[7:4] == 4'h3) && !wbyte[7] &&
+                   (wbyte[6:0] == 7'h41 || wbyte[6:0] == 7'h42 ||
+                    wbyte[6:0] == 7'h43 || wbyte[6:0] == 7'h46 ||
+                    wbyte[6:0] == 7'h1A);
+// An ILLEGAL-COMMAND interrupt: only a driver writing a command this model
+// does not implement produces one, and the ROM's vocabulary is all implemented.
+wire dbg_arm_ill = scsi_strobe && !write && (addr[7:4] == 4'h5) && ncr_rdata[6];
+// "The driver went somewhere that is not our SCSI window."  Two ways that can
+// look, and this catches both across the WHOLE $5xxxxxxx space rather than just
+// the $50F page the first version looked at:
+//   * an address nothing here decodes.  Those are NOT bus faults -- the beat
+//     handler acks them and returns zero -- so a driver pointed at the wrong
+//     base would poll a register that reads 0 for ever, entirely invisibly.
+//   * a SIXTEEN-BYTE-strided access inside a window we DO decode.  VIA1/VIA2
+//     registers sit at 512-byte strides and the SCC at 4, so addr[8:4] != 0
+//     there means somebody is treating that window as a 53C9x register file.
+wire dbg_sel_any  = sel_via1 | sel_via2 | sel_regs | sel_djmemc | sel_asc |
+                    sel_scsi | sel_sdma | sel_scc | sel_id;
+wire dbg_undec    = ce && (astate == A_IDLE) && sel && !ack && in_low &&
+                    !sel_scsi && !sel_sdma &&
+                    (!dbg_sel_any || (addr[8:4] != 5'd0));
+wire dbg_arm_now  = dbg_arm_cmd || dbg_arm_ill || dbg_undec;
+
+always @(posedge clk) begin
+	if (!nreset) begin
+		dbg_armed <= 0; dbg_left <= DBG_BUDGET[11:0];
+		dbg_hb <= 0;
+		dbg_be_d <= 0; dbg_be_last <= 16'hFFFF;
+		dbg_be_p1 <= 0; dbg_be_p2 <= 0; dbg_be_v1 <= 0; dbg_be_v2 <= 0;
+		dbg_lo_p <= 0; dbg_lo_v <= 0;
+		dbg_wp <= 0;
+		dbg_hb_cnt <= 0; dbg_epoch <= 0; dbg_epoch_clr <= 0;
+	end
+	else begin
+
+
+		dbg_hb <= dbg_hb + 1'b1;
+
+		// Epoch bookkeeping.  dbg_epoch_clr is registered so the wide clear it
+		// drives starts from a flop rather than from the 25-bit heartbeat
+		// compare; it lands one cycle after the "E" record is queued, which
+		// does not matter.
+		dbg_epoch_clr <= 1'b0;
+		if (dbg_hb_tick) begin
+			if (dbg_hb_cnt == DBG_EPOCH_HB[3:0] - 4'd1) begin
+				dbg_hb_cnt    <= 0;
+				dbg_epoch     <= dbg_epoch + 1'b1;
+				dbg_epoch_clr <= 1'b1;
+			end
+			else dbg_hb_cnt <= dbg_hb_cnt + 1'b1;
+		end
+
+		dbg_be_d <= berr_active;
+		if (berr_active && !dbg_be_d && berr_addr[31:16] != dbg_be_last) begin
+			dbg_be_last <= berr_addr[31:16];
+			dbg_be_p1 <= 1; dbg_be_v1 <= berr_addr[31:24];
+			dbg_be_p2 <= 1; dbg_be_v2 <= berr_addr[23:16];
+		end
+
+		if (dbg_be_p1 && !dbg_qfull) begin
+			dbg_q[dbg_wp] <= {8'h42, dbg_be_v1};        // "B" fault addr 31:24
+			dbg_wp <= dbg_wp + 1'b1;
+			dbg_be_p1 <= 0;
+		end
+		else if (dbg_be_p2 && !dbg_qfull) begin
+			dbg_q[dbg_wp] <= {8'h62, dbg_be_v2};        // "b" fault addr 23:16
+			dbg_wp <= dbg_wp + 1'b1;
+			dbg_be_p2 <= 0;
+		end
+
+		else if (dbg_lo_p && !dbg_qfull) begin
+			dbg_q[dbg_wp] <= {8'h6E, dbg_lo_v};         // "n" probe addr 15:8
+			dbg_wp <= dbg_wp + 1'b1;
+			dbg_lo_p <= 0;
+		end
+		// No arming any more: first-sighting records are bounded, so everything
+		// is traced from power-on.  dbg_lo_p is SET here, in the same block that
+		// clears it -- driving it from the seen-marking block too made it a
+		// multiply-driven net, which Verilator waves through under
+		// -Wno-MULTIDRIVEN but Quartus rejects outright (Error 10028).
+		else if (dbg_ev && dbg_left != 0 && !dbg_qfull) begin
+			dbg_q[dbg_wp] <= {dbg_tag, dbg_val};
+			dbg_wp <= dbg_wp + 1'b1;
+			dbg_left <= dbg_left - 1'b1;
+			if (dbg_tag == "U" || dbg_tag == "u") begin
+				dbg_lo_p <= 1'b1;
+				dbg_lo_v <= addr[15:8];
+			end
+		end
+		else if (dbg_hb_tick && !dbg_qfull) begin
+			// The epoch boundary replaces that second's heartbeat, so "E" is
+			// also a heartbeat for the decoder's timeline.  It is dropped on a
+			// full queue exactly as a heartbeat is; the tables still clear.
+			if (dbg_hb_cnt == DBG_EPOCH_HB[3:0] - 4'd1)
+				dbg_q[dbg_wp] <= {8'h45, dbg_epoch};    // "E" epoch boundary
+			else
+				dbg_q[dbg_wp] <= {8'h48, 8'h00};        // "H00" heartbeat, link alive
+			dbg_wp <= dbg_wp + 1'b1;
+		end
+		if (dbg_arm_now) dbg_armed <= 1;            // kept only as a status bit
+	end
+end
+
+// 8N1 transmitter + the 4-characters-per-event formatter
+function [7:0] dbg_hex(input [3:0] n);
+	dbg_hex = (n < 4'd10) ? (8'h30 + {4'd0, n}) : (8'h37 + {4'd0, n});
+endfunction
+
+reg  [9:0] dbg_sr;                  // {stop, data, start}, idle all ones
+reg  [3:0] dbg_nbit;
+reg  [8:0] dbg_div;
+reg [15:0] dbg_cur;
+reg  [1:0] dbg_ph;
+reg        dbg_have;
+wire       dbg_tx_idle = (dbg_nbit == 4'd0);
+wire       dbg_txd = dbg_sr[0];
+
+always @(posedge clk) begin
+	if (!nreset) begin
+		dbg_sr <= 10'h3FF; dbg_nbit <= 0; dbg_div <= 0;
+		dbg_rp <= 0; dbg_ph <= 0; dbg_have <= 0; dbg_cur <= 0;
+	end
+	else if (!dbg_tx_idle) begin
+		if (dbg_div == 0) begin
+			dbg_sr   <= {1'b1, dbg_sr[9:1]};
+			dbg_nbit <= dbg_nbit - 1'b1;
+			dbg_div  <= DBG_BAUD_DIV[8:0] - 9'd1;
+		end
+		else dbg_div <= dbg_div - 1'b1;
+	end
+	else if (!dbg_have) begin
+		if (!dbg_qempty) begin
+			dbg_cur  <= dbg_q[dbg_rp];
+			dbg_rp   <= dbg_rp + 1'b1;
+			dbg_have <= 1;
+			dbg_ph   <= 0;
+		end
+	end
+	else begin
+		case (dbg_ph)
+		2'd0: dbg_sr <= {1'b1, dbg_cur[15:8],      1'b0};
+		2'd1: dbg_sr <= {1'b1, dbg_hex(dbg_cur[7:4]), 1'b0};
+		2'd2: dbg_sr <= {1'b1, dbg_hex(dbg_cur[3:0]), 1'b0};
+		2'd3: dbg_sr <= {1'b1, 8'h20,              1'b0};
+		endcase
+		dbg_nbit <= 4'd10;
+		dbg_div  <= DBG_BAUD_DIV[8:0] - 9'd1;
+		dbg_ph   <= dbg_ph + 1'b1;
+		if (dbg_ph == 2'd3) dbg_have <= 0;
+	end
+end
+
+// DEBUG BUILD: the trace owns the modem port outright, so the heartbeat is
+// visible from power-on and a silent /dev/ttyS1 means a broken channel, not
+// merely an un-armed one.  Nothing in this machine uses the guest's serial
+// port today; drop this assign (and keep scc_txd_int) to give it back.
+/* verilator lint_off UNUSEDSIGNAL */
+assign scc_txd_a = dbg_txd;
+/* verilator lint_on UNUSEDSIGNAL */
+
+`else   // SCSI_TRACE
+
+// Normal build: the guest's SCC owns the modem port, as it should.
+assign scc_txd_a = scc_txd_int;
+
+`endif  // SCSI_TRACE
+
+//----------------------------------------------------------------------------
 // EASC — stereo FIFO (every Mac OS sound) plus the wavetable boot chime
 //----------------------------------------------------------------------------
 wire        asc_stb = ce && (astate == A_IDLE) && sel && !ack && sel_asc;
@@ -616,7 +982,7 @@ scc #(.SYS_CLK_HZ(33_000_000)) scc_inst
 	.rdata     (scc_rdata),
 	._irq      (_scc_irq),
 	.rxd       (scc_rxd_a),
-	.txd       (scc_txd_a),
+	.txd       (scc_txd_int),
 	.cts       (scc_cts_a),
 	.rts       (scc_rts_a),
 	.rxd_b     (scc_rxd_b),
