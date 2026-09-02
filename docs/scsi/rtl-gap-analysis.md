@@ -159,10 +159,95 @@ read INTR) or TC=full-count (writes/blind). Status+message: `$11`, wait INT
 15. **`ce` gating asymmetry** between `dma_valid` (ungated) and the IOSB's
     `A_SDMA` consumer (ce-gated) — harmless in sim (`ce=1`), a hang on real
     ce. Align them.
-16. NetBSD-only features if NetBSD boot ever becomes a goal: `$43`/`$46`
-    selects, FIFO-preloaded `$41`/`$42`, seq-step 0..4 semantics + duplicate
-    in FIFO-flags top bits, reselection two-byte FIFO contract. None of it is
-    needed for the Mac ROM.
+16. *(LARGELY DONE 2026-09-01, and it was not NetBSD-only after all — A/UX
+    3.1's own `c94` driver is the same shape; see
+    [`aux-c94-driver.md`](aux-c94-driver.md).)* Non-ROM-driver features:
+    FIFO-preloaded `$41`/`$42` (these already worked — `exec_command` masks
+    the DMA bit off, so the bare and DMA forms share a case, and the FIFO
+    drain feeds `cdb_byte`), `$43` SELATNS and `$46` SELATN3 (both used to
+    return ILLEGAL COMMAND; now implemented, `$43` reporting seq-step 1 with
+    MESSAGE OUT and answering an EXTENDED message with MESSAGE REJECT), and
+    the seq-step duplicate in FIFO-flags bits 7:5. Still open: the
+    reselection two-byte FIFO contract, and `$1A` SET ATN mid-transfer.
+    `verilator/tb_ncr53c96.sv` covers both driver dialects.
+
+17. **Do not flush the FIFO on a selection timeout.** *(FIXED 2026-09-01 —
+    a real bug, but NOT the
+    A/UX 3.1 boot failure -- see RESUME-aux-machine-id.md.)* A real 53C94 that selects nobody
+    leaves the driver's preloaded bytes in the FIFO, because nothing went
+    out. Both real drivers depend on that:
+    - A/UX's `c94` records how many bytes it pushed (IDENTIFY + CDB) and, on
+      the disconnect interrupt, compares it against FIFO-flags `& $1F`.
+      Equal means "this SCSI ID is empty" -> `ret = 5`, *Cannot select SCSI
+      device*, which is the expected answer for six of the seven IDs on
+      every bus scan. Short means "the target answered and then vanished
+      mid-command" -> `ret = 8`, ***Protocol Error Processing SCSI request***.
+    - NetBSD makes the same test at select step 3: "the arbiter of did the
+      CDB actually go out is the FIFO count"
+      (`netbsd-ncr53c9x-expectations.md` 2.4).
+
+    `ncr53c96.sv` did `fifo_cnt <= 0` there, so the count never matched,
+    every empty ID reported a fatal protocol error, and A/UX condemned the
+    bus — which is why even the disk it *could* talk to never completed a
+    request. The ROM is untouched by this: its DMA-form select starts from
+    an empty FIFO either way. Pinned by `tb_ncr53c96.sv` T7.
+
+18. **Non-DMA `$10` TRANSFER INFO must flip the phase to STATUS on the
+    target's last byte.** *(FIXED 2026-09-01 — validated against a QEMU
+    master boot of this exact ROM+disk; this is the A/UX 3.1 boot failure.)*
+    A/UX Startup's `saio` reaches the disk through the Mac ROM's SCSI
+    Manager (`_SCSIDispatch`), which selects with the ROM's `$C1` DMA-select
+    dialect — **not** the Unix `$42` (confirmed both ways: our hardware
+    traces show only `$C1`, zero `$42`; QEMU's A/UX-Startup window shows 580
+    `$C1`, zero `$42`, and the `$42` traffic is the already-loaded A/UX
+    *kernel* after handoff). The ROM SCSI Manager reads bulk data as `$90`
+    DMA chunks, but handles the unaligned tail of a transfer (INQUIRY = 36 =
+    16+16+4, disklabels, partition entries) one byte at a time with non-DMA
+    `$10` TI. On the byte that empties the SCSI request, real silicon — and
+    QEMU `esp_command_complete` — flips the phase to STATUS and leaves that
+    last byte in the FIFO for the initiator to read *after* it sees the
+    phase change (`esp.c`: "Non-DMA transfers from the target will leave the
+    last byte in the FIFO").
+
+    Our `arm_pio_in` pushed the byte and raised BS but **left the phase at
+    DATA IN**. The ROM's original-API `SCSIComplete` ends its byte loop by
+    count and then polls `STATUS` for the phase to leave DATA IN; it never
+    did, so the ROM spun its calibrated `TimeSCSIDB` wait (~7 s) and
+    returned `ret = 8` *Protocol Error Processing SCSI request* → `$03` bus
+    reset → retry → give up. **Fix:** on the `$10` handshake that pushes the
+    last byte (`sbuf_pos == sbuf_len-1 && blocks_left == 0`), set phase
+    STATUS as BS is raised, byte still in the FIFO. Mid-tail `$10`s
+    (`sbuf_pos <` last) keep phase DATA IN, exactly like QEMU's
+    `reg[4]=0x91`. Pinned by `tb_ncr53c96.sv` T11.
+
+    The `$90` bulk-read completion was **already correct** and needed no
+    change: QEMU always drains a chunk fully on DRQ (`lower_drq` at
+    `fifo<2`) and only *then* raises the chunk/completion interrupt, so the
+    completion never arrives with data in the FIFO. `tb_ncr53c96.sv` T10
+    (16-byte ROM chunks) and T12 (saio's 256-byte chunks) both transcribe
+    QEMU's exact byte stream and confirm the existing `tc_zero && fifo_cnt <
+    2` arm matches.
+
+    Corollary found by T11's tight timing: the "source exhausted"
+    predicates (the underflow arm, the completion arm, and the `arm_pio_in`
+    underflow) must treat `synth_on` — the synthesized-response sequencer
+    still streaming INQUIRY/SENSE/MODE/CAPACITY bytes into the buffer — as
+    "data in flight", exactly like `io_busy` for a sector. A driver issuing
+    TI within a few cycles of the select interrupt otherwise sees the data
+    phase close before the response exists. Real buses are too slow to hit
+    it today; the tb is not.
+
+    **A dead end that cost a build, recorded so it is not retried.** The
+    first cut mis-read the epoch-deduped hardware trace as a "$90 final
+    chunk, INT-before-drain" deadlock and added a second completion arm that
+    fired with a full FIFO (`fifo_cnt >= 2`), plus a `drain_tail` register to
+    hold DREQ through the undrained tail. That scenario **does not occur** —
+    QEMU never completes with data in the FIFO — and the early arm cleared
+    `xfer_in` with 16 bytes still pending, dropping DREQ (VIA2 IFR bit 0,
+    item 11) mid-burst so the ROM abandoned the read and the boot scan
+    flashed `?`. Both the arm and `drain_tail` were reverted once the QEMU
+    trace showed the real `$10` mechanism; the lesson is to diff against the
+    QEMU golden trace, not to theorise from the lossy first-sighting stream.
 
 ## Verification hooks
 
