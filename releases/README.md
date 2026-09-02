@@ -12,10 +12,52 @@ must never be flashed (`scripts/deploy_screenshot.sh` refuses one).
 
 | build | md5 | timing | notes |
 |---|---|---|---|
+| `wombat33_20260902.rbf` | `70716e92871448d1ff81ebb430902f4a` | met, **+0.130 ns** | **A/UX 3.1 boots to multiuser.** Both NCR53C96 SCSI bugs fixed (control-path phase flip + write-path chunk-flush). First build verified on hardware against BOTH A/UX 3.1 and Mac OS 8.1. Tracer off; seed 13; 85 % ALMs. |
 | `wombat33_20260831_2.rbf` | `4414e7b3294b3d554a9e43faa16682bd` | met, **+0.062 ns** | **The machine has a serial port.** Ports the Z8530 SCC from MacLC onto the beat bus, plus MIDI-over-SCC and MT32-pi. 85 % ALMs — watch the slack. |
 | `wombat33_20260831_1.rbf` | `3901ef5705f58dba3279c0417412f5f8` | met, +0.243 ns | **Sound works.** Fixes the watch-cursor wedge (ASC FIFOSTAT reported an empty FIFO as full) and hooks up the $806 volume slider. |
 | `wombat33_20260830.rbf` | `64c79dfb93ceefb549200c78671cdc31` | met, +0.248 ns | **ADB actually works** — the mouse button reaches the guest and motion stops inventing input. |
 | `wombat33_20260829.rbf` | `4c46a65c3a48b44ddb6f4fd6808d0422` | met, +0.245 ns | First build that boots Mac OS unattended. |
+
+## `wombat33_20260902.rbf`
+
+md5 `70716e92871448d1ff81ebb430902f4a`, timing met at **+0.130 ns** (seed 13,
+`SCSI_TRACE` off). Fitter/STA reports next to it as
+`wombat33_20260902.{fit,sta}.summary` (gitignored, local only).
+
+**A/UX 3.1 now boots to the multiuser Finder desktop.** Two NCR53C96 SCSI bugs
+in `rtl/ncr53c96.sv`, both needed:
+
+1. **Control path:** non-DMA `$10` TRANSFER INFO flips phase to STATUS on the
+   request's last byte. Killed "Protocol Error Processing SCSI request"; A/UX
+   reaches `fsck`.
+2. **Write path:** saio splits one WRITE into `$90` TIs of TC=256; the old
+   completion arm flushed a part-filled sector buffer at every chunk boundary,
+   so each sector got 256 real bytes + stale zeros and fsck saw "BAD SUPER
+   BLOCK: MAGIC NUMBER WRONG." Fix: a chunk end is an interrupt only; only
+   `sbuf_pos == 512` flushes. (Mac OS writes single-TI and never tripped it,
+   which is why every prior build booted Mac OS but corrupted A/UX.)
+
+Pinned in sim by `verilator/tb_ncr53c96.sv` T1–T15 (6556 checks). Full story in
+`RESUME-aux-superblock.md`, `docs/scsi/rtl-gap-analysis.md` item 19, and
+`docs/scsi/aux-startup-boot-path.md` §9.
+
+**This is the tracer-off release of the seed-13 build.** `SCSI_TRACE` (the
+`rtl/iosb.sv` modem-TX debug mux) is commented out in `wombat33.qsf`, so the
+SCC reaches the serial pin normally. Removing the tracer logic reroutes the
+netlist, so this is a distinct fit from the 09-01 `scratch/seeds` seed-13
+backup (`abb5ede4…`, +0.132 ns) — same seed, different bytes.
+
+**Hardware result (192.168.99.143, 2026-09-02):**
+
+| guest | result |
+|---|---|
+| A/UX 3.1 (`HD60_512-AUX3.1-Installed.hda`) | boots through fsck → multiuser Finder desktop; 16+ min interactive (CommandShell, menus); `shutdown -h now` → "You may now switch off." |
+| Mac OS 8.1 (`QuadSquad8.hda`) | boots to Finder; keyboard + mouse responsive; menu-bar clock ticks at idle; clean Shut Down. No regression. |
+
+Both guests were exercised at idle and shut down cleanly. An apparent Mac OS
+"foreground wedge" seen mid-session was traced to a test-harness bug (a guest
+menu-driver script killed by a timeout left the mouse button held down), not
+the bitstream; it did not reproduce with clean input.
 
 ## `wombat33_20260831_2.rbf`
 

@@ -122,7 +122,7 @@ set_global_assignment -name SEED 13
 # Never ship a bitstream built with this on.  scripts/build_only.sh detects the
 # line below and prints a DEBUG BUILD banner so it cannot pass unnoticed.
 # ============================================================================
-set_global_assignment -name VERILOG_MACRO "SCSI_TRACE=1"
+#set_global_assignment -name VERILOG_MACRO "SCSI_TRACE=1"
 
 #use only 1MB per frame for scaler to free ~21MB DDR3 RAM
 #set_global_assignment -name VERILOG_MACRO "MISTER_SMALL_VBUF=1"
