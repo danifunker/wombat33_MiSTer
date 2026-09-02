@@ -123,5 +123,15 @@ tb_sdram:
 	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME +define+SIMULATION=1 --top-module tb_sdram --Mdir ./obj_dir_tb -o tb_sdram tb_sdram.sv $(RTL)/sdram_beat32.sv $(RTL)/sdram.sv altddio_out_stub.v
 	./obj_dir_tb/tb_sdram
 
+# Directed unit test for the 53C96 SCSI target (rtl/ncr53c96.sv), driven in
+# BOTH driver dialects: the Quadra 800 ROM's DMA-form selects and a Unix
+# ncr53c9x-class driver's FIFO-preloaded $41/$42/$43/$46.  A/UX's own c94
+# driver is the second kind, so this is where widening the model for it is
+# checked against the ROM path that already boots Mac OS.
+#   make tb_ncr53c96
+tb_ncr53c96:
+	$V --binary --timing -Wno-fatal -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNSIGNED -Wno-CMPCONST -Wno-DECLFILENAME -Wno-CASEINCOMPLETE -Wno-BLKSEQ +define+SIMULATION=1 +define+VERILATOR=1 --top-module tb_ncr53c96 --Mdir ./obj_dir_tb -o tb_ncr53c96 tb_ncr53c96.sv $(RTL)/ncr53c96.sv
+	./obj_dir_tb/tb_ncr53c96
+
 clean:
 	rm -rf obj_dir obj_dir_tb

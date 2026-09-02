@@ -6,13 +6,36 @@
 //  QEMU esp.c / MAME ncr53c90.cpp as semantic references
 //  (docs/scsi/rtl-gap-analysis.md).  The bus itself is not modeled.
 //
-//  The ROM's contract, which this implements:
-//   - selects are the DMA form ($C1/$C2) with TC preloaded and an EMPTY
-//     FIFO; the select completes silently (the ROM's poll exits on DREQ)
-//     and the CDB then arrives as FIFO writes plus PDMA bytes, mixed
-//     (the last CDB byte always comes through the PDMA port).  The CDB
-//     length is inferred from the opcode group; when complete the command
-//     executes and I_BUS|I_FC is raised with the new phase visible.
+//  TWO driver dialects are served, and they select very differently
+//  (verilator/tb_ncr53c96.sv exercises both):
+//
+//   A. the Quadra 800 ROM — DMA-form selects ($C1/$C2) with TC preloaded
+//      and an EMPTY FIFO.
+//   B. a Unix ncr53c9x-class driver — NetBSD's, and A/UX 3.1's `c94`
+//      (scsifsm.c/scsitask.c, which reads the sequence-step register and
+//      classifies interrupts exactly as NetBSD's does).  On mac68k
+//      NCR_F_DMASELECT is never set, so every select is FIFO-PRELOADED
+//      and the bare command byte is written: $41 SELNATN (CDB only),
+//      $42 SELATN (IDENTIFY + CDB), $43 SELATNS (stop after IDENTIFY, to
+//      negotiate), $46 SELATN3 (IDENTIFY + 2 tag bytes + CDB).
+//      docs/scsi/netbsd-ncr53c9x-expectations.md section 2.
+//
+//  The contract, which this implements:
+//   - $41/$42/$46 (and their DMA forms) put the chip in COMMAND phase and
+//     start collecting the CDB; the select itself completes SILENTLY (the
+//     ROM's poll exits on DREQ) and the CDB then arrives from the FIFO,
+//     from PDMA writes, or mixed — the ROM's last CDB byte always comes
+//     through the PDMA port, a Unix driver's whole CDB is preloaded.  The
+//     CDB length is inferred from the opcode group; when complete the
+//     command executes and I_BUS|I_FC is raised with sequence step 4 and
+//     the new phase visible.  That pairing (FC and BS together) is what a
+//     Unix driver requires of a completed selection.
+//   - $43 SELATNS instead stops after the IDENTIFY, reporting sequence
+//     step 1 with MESSAGE OUT in STATUS — anything else and the driver
+//     resets the chip.  The driver's negotiation message is then drained
+//     by a non-DMA TI; this target is async and narrow, so an EXTENDED
+//     message is answered with MESSAGE REJECT in MESSAGE IN, after which
+//     $12 resumes into COMMAND phase rather than disconnecting.
 //   - data moves THROUGH the 16-byte FIFO: $90 (DMA transfer info) loads
 //     TC and streams sector data into/out of the FIFO; the ROM gates its
 //     16-byte bursts on STATUS.TC0 + DREQ + FIFO-flags bit 4, drains via
@@ -106,7 +129,15 @@ reg        dma_active;             // current command carried the DMA bit
 reg        cdb_active;             // select done, collecting CDB bytes
 reg  [3:0] cdb_pos;
 reg  [3:0] cdb_need;               // 0 until the opcode byte arrives
-reg        skip_msg;               // ATN select: discard the identify byte
+reg  [1:0] skip_cnt;               // leading message bytes to discard:
+                                   // 0 for $41/$C1, 1 for $42/$C2 (IDENTIFY),
+                                   // 3 for $46 (IDENTIFY + 2 tag bytes)
+reg        xfer_msg_out;           // TI in MESSAGE OUT: drain the FIFO as a message
+reg  [7:0] msg_first;              // first byte of the outgoing message
+reg        msg_first_seen;         // msg_first is latched
+reg  [7:0] msgin_byte;             // byte the next MESSAGE IN hands over
+reg        msgin_reject;           // that byte is a MESSAGE REJECT, not COMMAND COMPLETE
+                                   // -> $12 resumes into COMMAND, it does not disconnect
 reg        exec_pending;           // CDB complete, execute next cycle
 reg        xfer_in;                // DMA transfer-info, target -> initiator
 reg        xfer_out;               // DMA transfer-info, initiator -> target
@@ -172,7 +203,7 @@ assign rdata = (rs == 4'h0) ? tcounter[7:0]  :
                (rs == 4'h4) ? {irq, 1'b0, 1'b0, tc_zero, 1'b0, phase} :   // bit7 = INT mirrors irq (QEMU esp STAT_INT)
                (rs == 4'h5) ? istatus :
                (rs == 4'h6) ? {5'd0, seq_step} :
-               (rs == 4'h7) ? {3'd0, fifo_cnt} :
+               (rs == 4'h7) ? {seq_step, fifo_cnt} :   // top bits = seq-step (dup)
                (rs == 4'h8) ? conf1 :
                (rs == 4'h9) ? clkconv :
                (rs == 4'hA) ? testr :
@@ -216,7 +247,7 @@ endtask
 
 // one CDB byte arrived (from the FIFO drain or straight off the PDMA port)
 task cdb_byte(input [7:0] b);
-	if (skip_msg) skip_msg <= 0;             // ATN select: identify message
+	if (skip_cnt != 0) skip_cnt <= skip_cnt - 1'b1;   // IDENTIFY / queue tag
 	else begin
 		cdb[cdb_pos] <= b;
 		if (cdb_pos == 0) cdb_need <= group_len(b);
@@ -269,6 +300,8 @@ wire arm_fill    = !fifo_ext && no_dma_arm && !arm_cdb_ff && !arm_drain &&
 wire arm_pio_in  = !fifo_ext && no_dma_arm && !arm_cdb_ff && !arm_drain &&
                    !arm_fill && xfer_pio_in && byte_avail && fifo_cnt == 0 &&
                    sbuf_rd_ok;
+wire arm_msg_out = !fifo_ext && no_dma_arm && !arm_cdb_ff && !arm_drain &&
+                   !arm_fill && !arm_pio_in && xfer_msg_out && fifo_cnt != 0;
 
 // Synthesized-response sequencer: exec_cdb can no longer clear and fill
 // 18 words in one cycle, so it records what to build and this machine
@@ -384,8 +417,10 @@ always @(posedge clk) begin
 		mounted <= 0; disk_blocks <= 0;
 		io_lba <= 0; io_rd <= 0; io_wr <= 0;
 		dma_active <= 0;
-		cdb_active <= 0; cdb_pos <= 0; cdb_need <= 0; skip_msg <= 0;
+		cdb_active <= 0; cdb_pos <= 0; cdb_need <= 0; skip_cnt <= 0;
 		exec_pending <= 0;
+		xfer_msg_out <= 0; msg_first <= 0; msg_first_seen <= 0;
+		msgin_byte <= 0; msgin_reject <= 0;
 		xfer_in <= 0; xfer_out <= 0; xfer_pio_in <= 0; xfer_pio_out <= 0;
 		chunk_irq_armed <= 0;
 		lba <= 0; blocks_left <= 0;
@@ -513,11 +548,30 @@ always @(posedge clk) begin
 			dec_tc;
 		end
 		else if (arm_pio_in) begin
-			// non-DMA TI data-in: exactly one byte, then bus service
+			// non-DMA TI data-in: exactly one byte, then bus service.  When
+			// that byte is the target's last, the phase changes on this very
+			// handshake -- the byte is read out of the FIFO with STATUS
+			// already showing (QEMU leaves the last PIO byte in the FIFO for
+			// exactly this reason, esp.c "Non-DMA transfers from the target
+			// will leave the last byte in the FIFO").  A driver that ends
+			// its byte loop by count and then polls for the phase change
+			// (the ROM's original-API SCSIComplete) hangs otherwise.
 			fifo_push(sbuf_byte);
 			sbuf_pos <= sbuf_pos + 1'b1;
 			xfer_pio_in <= 0;
+			if (sbuf_pos == sbuf_len - 1'b1 && blocks_left == 0 && !io_busy)
+				phase <= PH_STAT;
 			raise(I_BUS);
+		end
+		else if (arm_msg_out) begin
+			// MESSAGE OUT: the message the driver preloaded leaves the
+			// FIFO a byte at a time.  Only its first byte decides what
+			// the target does next, so that is all we keep.
+			if (!msg_first_seen) begin
+				msg_first      <= fifo[0];
+				msg_first_seen <= 1;
+			end
+			fifo_shift;
 		end
 
 		// synthesized responses stream one byte per clock through port E;
@@ -542,16 +596,30 @@ always @(posedge clk) begin
 		end
 
 		//---------------------------------------------------- transfer ends
-		// data-in chunk complete: TC expired and the host drained the FIFO
+		// data-in chunk complete: TC expired and the host drained the FIFO.
+		// This is the ONLY data-in completion the ROM SCSI Manager and A/UX's
+		// c94 ever produce: QEMU esp_do_dma always drains the whole chunk on
+		// DRQ (lower_drq at fifo<2) BEFORE raising the completion interrupt,
+		// so the completion never arrives with data still in the FIFO -- a
+		// full 512-byte block is two TC=256 $90 chunks, each drained then BS,
+		// the last one flipping to STATUS (qemu-esp-behavior.md, and the
+		// master trace of this exact ROM+disk).  "Source exhausted" also
+		// requires the synthesized-response sequencer to be idle: while
+		// synth_on streams a response into the buffer the data is in flight,
+		// not absent -- exactly like io_busy for a sector.  (A driver fast
+		// enough to issue TI within a few cycles of the select interrupt --
+		// the tb is -- would otherwise see the phase close before the data
+		// exists.)
 		if (xfer_in && chunk_irq_armed && tc_zero && fifo_cnt < 5'd2) begin
 			chunk_irq_armed <= 0;
 			xfer_in <= 0;
-			if (!byte_avail && blocks_left == 0 && !io_busy) phase <= PH_STAT;
+			if (!byte_avail && blocks_left == 0 && !io_busy && !synth_on)
+				phase <= PH_STAT;
 			raise(I_BUS);
 		end
 		// data-in underflow: source exhausted before TC — go to status
 		if (xfer_in && chunk_irq_armed && !tc_zero && !byte_avail &&
-		    blocks_left == 0 && !io_busy) begin
+		    blocks_left == 0 && !io_busy && !synth_on) begin
 			chunk_irq_armed <= 0;
 			xfer_in <= 0;
 			phase <= PH_STAT;
@@ -598,6 +666,35 @@ always @(posedge clk) begin
 			xfer_pio_out <= 0;
 			raise(I_BUS);
 		end
+		// MESSAGE OUT complete: the whole message left the FIFO.  What the
+		// target does next is decided by the message it just received:
+		//
+		//   * an EXTENDED message ($01 — SDTR or WDTR, the only reason a
+		//     Unix driver issues $43 SELATNS at all) must be answered.  This
+		//     target is asynchronous and narrow, and SCSI-2 says a target
+		//     that does not implement a negotiation replies MESSAGE REJECT,
+		//     which ncr53c9x-class drivers read as "stay asynchronous" and
+		//     carry on.  So: phase MESSAGE IN with $07 queued.
+		//   * anything else (IDENTIFY, ABORT, a re-sent tag) — go take the
+		//     command, which is what the driver sends next.
+		//
+		// Either way this is a phase change, i.e. a bus-service interrupt.
+		if (xfer_msg_out && fifo_cnt == 0) begin
+			xfer_msg_out <= 0;
+			if (msg_first == 8'h01) begin
+				phase        <= PH_MIN;
+				msgin_byte   <= 8'h07;          // MESSAGE REJECT
+				msgin_reject <= 1;
+			end
+			else begin
+				phase      <= PH_CMD;
+				cdb_active <= 1;
+				cdb_pos    <= 0;
+				cdb_need   <= 0;
+				skip_cnt   <= 0;
+			end
+			raise(I_BUS);
+		end
 		// non-DMA data-in underflow: the source is exhausted, so the byte this
 		// TI is waiting to hand over will NEVER arrive -- arm_pio_in gates on
 		// byte_avail, so xfer_pio_in would stay armed forever with no I_BUS and
@@ -617,7 +714,8 @@ always @(posedge clk) begin
 		// 02a3ce56a7 notes that this is precisely what makes EMILE boot on
 		// m68k -- i.e. a Mac bootloader hitting the identical stall.
 		// docs/scsi/qemu-esp-behavior.md:357-369.
-		if (xfer_pio_in && !byte_avail && blocks_left == 0 && !io_busy) begin
+		if (xfer_pio_in && !byte_avail && blocks_left == 0 && !io_busy &&
+		    !synth_on) begin
 			xfer_pio_in <= 0;
 			phase <= PH_STAT;
 			raise(I_BUS);
@@ -690,29 +788,88 @@ task exec_command(input [7:0] c);
 		7'h02: begin                                   // reset chip
 			fifo_cnt <= 0; istatus <= 0; irq <= 0;
 			phase <= PH_DOUT; seq_step <= 0;
-			cdb_active <= 0; exec_pending <= 0;
+			cdb_active <= 0; exec_pending <= 0; skip_cnt <= 0;
 			xfer_in <= 0; xfer_out <= 0;
 			xfer_pio_in <= 0; xfer_pio_out <= 0;
+			xfer_msg_out <= 0; msg_first_seen <= 0;
+			msgin_byte <= 0; msgin_reject <= 0;
 			chunk_irq_armed <= 0;
 			dma_active <= 0; tc_zero <= 0;
 		end
 		7'h03: begin                                   // reset SCSI bus
 			if (!conf1[6]) raise(I_RST);               // CONFIG1 DISR gates INT
 		end
-		7'h41, 7'h42: begin                            // select (with ATN)
+		// All four select forms.  Two dialects arrive here:
+		//
+		//   * the Quadra 800 ROM writes the DMA form ($C1/$C2) with TC
+		//     preloaded and an EMPTY FIFO; the CDB follows afterwards as
+		//     FIFO writes plus PDMA bytes.  The select completes silently
+		//     (the ROM's poll exits on DREQ) and the interrupt is deferred
+		//     until the command has run — QEMU does the same.
+		//   * a Unix ncr53c9x-class driver (NetBSD's, and A/UX's c94)
+		//     never sets NCR_F_DMASELECT, so it PRELOADS the FIFO and
+		//     writes the bare command.  Same code path: the FIFO drain
+		//     feeds cdb_byte, skip_cnt eats the leading message bytes.
+		//
+		// The dma bit is masked off by `op`, so $C1/$41 and $C2/$42 are the
+		// same case; only the byte counts differ.
+		7'h41, 7'h42, 7'h46: begin
 			if (dest_id == DISK_ID[3:0] && mounted) begin
-				// the ROM's DMA select: complete silently; its poll exits
-				// on DREQ and the CDB follows via FIFO/PDMA (QEMU defers
-				// the select interrupt until the command has run)
 				phase <= PH_CMD;
 				cdb_active <= 1;
 				cdb_pos <= 0;
 				cdb_need <= 0;
-				skip_msg <= (op == 7'h42);
-				seq_step <= 3'd4;
+				// $41 SELNATN: CDB only.  $42 SELATN: IDENTIFY + CDB.
+				// $46 SELATN3: IDENTIFY + 2 tag bytes + CDB.
+				skip_cnt <= (op == 7'h46) ? 2'd3 :
+				            (op == 7'h42) ? 2'd1 : 2'd0;
+				seq_step <= 3'd4;                  // all bytes went out
 			end
 			else begin
-				// selection timeout
+				// Selection timeout.  The bytes the driver preloaded
+				// STAY IN THE FIFO — nothing went out, because nothing
+				// answered.  Do not flush them: a Unix driver reads the
+				// FIFO count right here to tell the two cases apart.
+				//
+				// A/UX's c94 driver records how many bytes it pushed
+				// (IDENTIFY + CDB) and, on the disconnect interrupt,
+				// compares it against FIFO-flags & $1F:
+				//     equal -> "Cannot select SCSI device"   (benign;
+				//              this is what probing an empty ID means)
+				//     short -> "Protocol Error Processing SCSI request"
+				//              (the target answered and then vanished
+				//              mid-command — a real bus fault)
+				// Clearing the count made EVERY empty SCSI ID look like
+				// the second case, so the bus scan reported a protocol
+				// error on six of seven targets and A/UX condemned the
+				// whole bus.  NetBSD leans on the same FIFO count at
+				// select step 3 (netbsd-ncr53c9x-expectations.md 2.4:
+				// "the arbiter of did the CDB actually go out is the
+				// FIFO count").  The ROM is unaffected — its DMA-form
+				// select starts from an empty FIFO either way.
+				seq_step <= 3'd0;
+				raise(I_DISC);
+			end
+		end
+		7'h43: begin                                   // SELATNS
+			// "Arbitrate, select and stop after IDENTIFY message" — the
+			// form a driver uses when it has something to negotiate.  The
+			// IDENTIFY byte leaves the FIFO; the CDB the driver preloaded
+			// behind it stays there, and the driver flushes it before
+			// building the message (NetBSD ncr53c9x, section 3.1).
+			// Sequence step 1 with MESSAGE OUT visible in STATUS is what
+			// the driver demands here — anything else and it resets the
+			// chip (section 2.3 case 1).
+			if (dest_id == DISK_ID[3:0] && mounted) begin
+				if (fifo_cnt != 0) fifo_shift;     // the IDENTIFY goes out
+				phase          <= PH_MOUT;
+				seq_step       <= 3'd1;
+				cdb_active     <= 0;
+				xfer_msg_out   <= 0;
+				msg_first_seen <= 0;
+				raise(I_BUS | I_FC);
+			end
+			else begin
 				seq_step <= 3'd0;
 				fifo_cnt <= 0;
 				raise(I_DISC);
@@ -749,9 +906,23 @@ task exec_command(input [7:0] c);
 				raise(I_FC);
 			end
 			else if (phase == PH_MIN) begin
-				fifo[0] <= 8'h00;
+				// one message byte per TI, completing with FC (NetBSD
+				// section 3.3): whatever the target has queued — $00
+				// COMMAND COMPLETE after ICCS, $07 MESSAGE REJECT when a
+				// negotiation was turned down.
+				fifo[0] <= msgin_byte;
 				fifo_cnt <= 5'd1;
 				raise(I_FC);
+			end
+			else if (phase == PH_MOUT) begin
+				// the driver preloaded a message; drain it and decide what
+				// the target does next when the FIFO empties (above).
+				// msg_first is cleared too, so a TI issued with an empty
+				// FIFO completes as a zero-length message (-> COMMAND)
+				// instead of re-deciding on the previous one.
+				xfer_msg_out   <= 1;
+				msg_first_seen <= 0;
+				msg_first      <= 8'h00;
 			end
 			else raise(I_ILL);
 		end
@@ -760,13 +931,30 @@ task exec_command(input [7:0] c);
 			fifo[1] <= 8'h00;                          // command complete msg
 			fifo_cnt <= 5'd2;
 			phase <= PH_MIN;
+			msgin_byte <= 8'h00;
+			msgin_reject <= 0;
 			raise(I_FC);
 		end
 		7'h12: begin                                   // message accept
-			phase <= PH_DOUT;
 			seq_step <= 3'd0;
 			fifo_cnt <= 0;
-			raise(I_DISC);
+			if (msgin_reject) begin
+				// the message just acked was our MESSAGE REJECT, not a
+				// COMMAND COMPLETE: the target stays connected and now
+				// wants the command it was selected for.
+				msgin_reject <= 0;
+				msgin_byte   <= 8'h00;
+				phase        <= PH_CMD;
+				cdb_active   <= 1;
+				cdb_pos      <= 0;
+				cdb_need     <= 0;
+				skip_cnt     <= 0;
+				raise(I_BUS);
+			end
+			else begin
+				phase <= PH_DOUT;
+				raise(I_DISC);
+			end
 		end
 		7'h18: begin                                   // transfer pad
 			xfer_in <= 0; xfer_out <= 0;
