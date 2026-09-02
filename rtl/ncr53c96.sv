@@ -642,24 +642,28 @@ always @(posedge clk) begin
 			flush_pending <= 1;
 			sbuf_pos <= 0;
 		end
-		// data-out complete: TC expired, FIFO drained, buffer flushed
+		// data-out chunk complete: TC expired and the FIFO drained.  A TC
+		// expiry with a part-filled sector buffer is NOT the end of the
+		// nexus: the ROM/saio splits one WRITE into many $90 TIs of
+		// TC=256 (QEMU master esp trace of this ROM+disk: fsck's 2KB
+		// superblock write-back is 8 x TC=256, its 8KB cg writes are
+		// 32 x TC=256), so the next chunk continues into the same sector.
+		// Flushing the partial buffer here wrote 256 real bytes plus a
+		// stale upper half per chunk, burned one block of the CDB count
+		// per chunk, and flipped to STATUS halfway through the data --
+		// fsck's superblock landed smeared at 256 bytes/sector with the
+		// magic number in the void ("BAD SUPER BLOCK: MAGIC NUMBER
+		// WRONG").  A real target keeps DATA OUT until it holds the whole
+		// block: complete the TI, leave sbuf_pos accumulating, and let
+		// the pos==512 flush above do all the writing.  A block write's
+		// initiator sends exactly blocks x 512 bytes, so a genuine
+		// trailing partial sector cannot exist.
 		if (xfer_out && chunk_irq_armed && tc_zero && fifo_cnt == 0 &&
 		    !flush_pending && !io_busy) begin
-			if (sbuf_pos != 0 && sbuf_pos < 10'd512) begin
-				// trailing partial sector: flush what we have
-				io_lba <= lba;
-				lba <= lba + 1'b1;
-				if (blocks_left != 0) blocks_left <= blocks_left - 1'b1;
-				io_wr <= 1;
-				flush_pending <= 1;
-				sbuf_pos <= 0;
-			end
-			else begin
-				chunk_irq_armed <= 0;
-				xfer_out <= 0;
-				if (blocks_left == 0) phase <= PH_STAT;
-				raise(I_BUS);
-			end
+			chunk_irq_armed <= 0;
+			xfer_out <= 0;
+			if (blocks_left == 0) phase <= PH_STAT;
+			raise(I_BUS);
 		end
 		// non-DMA data-out: FIFO drained -> bus service
 		if (xfer_pio_out && fifo_cnt == 0) begin

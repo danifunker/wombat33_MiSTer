@@ -249,6 +249,36 @@ read INTR) or TC=full-count (writes/blind). Status+message: `$11`, wait INT
     trace showed the real `$10` mechanism; the lesson is to diff against the
     QEMU golden trace, not to theorise from the lossy first-sighting stream.
 
+19. **A DMA data-out TC expiry with a part-filled sector buffer is a chunk
+    boundary, not a trailing partial sector.** *(FIXED 2026-09-02 — this is
+    the "BAD SUPER BLOCK: MAGIC NUMBER WRONG" that blocked A/UX after item
+    18.)* Under A/UX Startup the ROM SCSI Manager splits one WRITE into many
+    `$90` TIs of **TC=256** (QEMU master esp trace: fsck's 2KB superblock
+    write-back at LBA 104 is 8 × TC=256, its 8KB cylinder-group writes are
+    32 × TC=256 — versus Mac OS, which writes a whole transfer in a single
+    TI of TC=512/4096/8192, which is why the Mac side never showed it). The
+    old completion arm treated every TC expiry with `sbuf_pos < 512` as a
+    trailing partial sector: it flushed 256 real bytes plus a stale upper
+    half to the *current* LBA, advanced the LBA, and burned one block of the
+    CDB count per chunk — so a 4-block write hit `blocks_left == 0` after 4
+    chunks and flipped to STATUS with half the data unsent, which the ROM's
+    phase-polling write loop obligingly accepted as success. On the disk
+    this smears the superblock at 256 bytes/sector: `fs_magic` (offset 1372
+    of the 2KB image, i.e. the second half of the third sector) lands in the
+    stale-zero void, and the *next* fsck read finds no magic. Byte-level
+    proof: the failed disk's sectors 104-107 are exactly
+    `intended[k*256:(k+1)*256] + 256 zero bytes` for k = 0..3, and QEMU
+    refuses to boot the same image. The fix deletes the partial flush: a
+    chunk completion (TC=0, FIFO drained) just raises BS and leaves
+    `sbuf_pos` accumulating across TIs; only `sbuf_pos == 512` flushes, and
+    the last block's flush already flips the phase. A block write's
+    initiator sends exactly blocks × 512 bytes, so a genuine trailing
+    partial sector cannot exist. tb T15 transcribes the 8 × TC=256 dialect
+    (1029 failures against the old arm; the smear cannot hide from its
+    byte-exact disk check). Note the completion may raise BS the same cycle
+    the final flush *arms* — the platform drains it afterwards, which is
+    also how a real target completes with the last block still in cache.
+
 ## Verification hooks
 
 - The boot block's `C` checksum row (expected `C=862D7F48` on the 2026-08-28b

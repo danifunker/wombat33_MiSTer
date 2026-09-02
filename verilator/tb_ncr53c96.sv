@@ -931,6 +931,75 @@ initial begin
 	read_regs(st, sp, it);
 	expect8("T14 readback ends STATUS", {5'd0, st[2:0]}, {5'd0, PH_STAT});
 
+	//------------------------------------------------------------------
+	$display("-- T15 chunked WRITE(6): 4 blocks at LBA 20 as 8 x ($90 TC=256) -- the saio/fsck dialect");
+	//------------------------------------------------------------------
+	// Under A/UX Startup the ROM SCSI Manager splits one WRITE into many
+	// $90 TIs of TC=256 (QEMU master esp trace of this ROM+disk: fsck's
+	// 2KB superblock write-back is 8 x TC=256, cg flushes 32 x TC=256).
+	// T14's single TC=1024 TI never exercised a TC expiry mid-sector, so
+	// the old "trailing partial sector" flush went unseen: it flushed 256
+	// real bytes plus a stale upper half per chunk, burned one block of
+	// the CDB count per chunk, and flipped to STATUS halfway through the
+	// data -- fsck's superblock landed smeared at 256 bytes/sector and
+	// the magic number vanished.  Require: phase holds DATA OUT through
+	// chunk 7, exactly 4 blocks flushed, and a byte-exact disk image.
+	reg_wr(R_CMD, 8'h02); repeat (4) @(negedge clk);
+	byi = wr_blocks;                               // blocks flushed so far
+	cdb[0]=8'h0A; cdb[1]=8'h00; cdb[2]=8'h00; cdb[3]=8'h14; cdb[4]=8'h04; cdb[5]=8'h00;
+	rom_command(6);                                // select + WRITE(6) LBA 20, 4 blocks
+	wait_irq(500, ok);
+	read_regs(st, sp, it);
+	$display("   T15 wsel  : stat=%02X intr=%02X", st, it);
+	expect_bits("T15 write select BS|FC", it, I_BUS | I_FC);
+	expect8("T15 phase DATA OUT", {5'd0, st[2:0]}, {5'd0, PH_DOUT});
+	reg_wr(R_CMD, 8'h01);                          // flush, as the ROM does
+	for (blk = 0; blk < 8; blk = blk + 1) begin
+		set_tc(16'd256);
+		reg_wr(R_CMD, 8'h90);
+		for (k = 0; k < 256; k = k + 1) begin
+			guard = 0;
+			while (!drq && guard < 100000) begin @(negedge clk); guard = guard + 1; end
+			if (guard >= 100000) begin
+				fails = fails + 1;
+				$display("  FAIL T15 DREQ stalled at chunk %0d byte %0d", blk, k);
+				k = 256;
+			end
+			else pdma_wr(((blk*256 + k)*11 + 7) & 8'hFF);
+		end
+		wait_irq(4000, ok);
+		read_regs(st, sp, it);
+		expect_bits("T15 chunk completion BS", it, I_BUS);
+		if (blk != 7)
+			expect8("T15 phase DATA OUT between chunks", {5'd0, st[2:0]}, {5'd0, PH_DOUT});
+	end
+	expect8("T15 phase STATUS after chunk 8", {5'd0, st[2:0]}, {5'd0, PH_STAT});
+	reg_wr(R_CMD, 8'h11); wait_irq(500, ok);       // ICCS
+	reg_rd(R_FIFO, b); expect8("T15 status GOOD", b, 8'h00);
+	reg_rd(R_FIFO, b);
+	reg_wr(R_CMD, 8'h12); wait_irq(500, ok);       // msgacc
+	// the final flush is armed the same cycle STATUS is raised (a real
+	// target completes with the last block still in its cache); let the
+	// platform model drain it before inspecting the medium
+	guard = 0;
+	while (wr_blocks - byi != 4 && guard < 100000) begin @(negedge clk); guard = guard + 1; end
+	$display("   T15 wdone : stat=%02X intr=%02X blocks_flushed=%0d", st, it, wr_blocks - byi);
+	checks = checks + 1;
+	if (wr_blocks - byi != 4) begin
+		fails = fails + 1;
+		$display("  FAIL T15 blocks flushed: got %0d want 4", wr_blocks - byi);
+	end
+	// the disk itself, byte-exact -- a smear cannot hide from this
+	for (k = 0; k < 2048; k = k + 1) begin
+		checks = checks + 1;
+		if (disk[20*512 + k] !== (((k*11) + 7) & 8'hFF)) begin
+			fails = fails + 1;
+			if (fails < 12)
+				$display("  FAIL T15 disk byte %0d (sector %0d+%0d): got %02X want %02X",
+				         k, 20 + k/512, k%512, disk[20*512 + k], ((k*11) + 7) & 8'hFF);
+		end
+	end
+
 	$display("== tb_ncr53c96: %0d checks, %0d failures ==", checks, fails);
 	if (fails != 0) $display("RESULT: FAIL");
 	else            $display("RESULT: PASS");

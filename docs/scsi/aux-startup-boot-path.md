@@ -329,3 +329,34 @@ byte drop/dup or packing error in the CPU↔chip PDMA path would corrupt the
 superblock while every ncr53c96 test passes; exercise it in the full Verilator
 sim or on hardware. **(c)** A/UX's on-Wombat33 device/geometry mapping computing
 the wrong superblock LBA.
+
+## 9. RESOLVED 2026-09-02 — the disk really was bad: the chunked-write smear
+
+Suspect (a) was right, with a mechanism nobody had on the list — and two of
+§8's premises were wrong:
+
+- **The superblock fsck judges is at slice+8 = LBA 104, not slice+16 = 112.**
+  QEMU's `scsi_disk_*` trace of the boot shows the check sequence on the wire:
+  `READ(6) 97,1` (label area) → `READ(6) 104,8` (4KB superblock) →
+  `WRITE(6) 104,8` — sector 112 never appears. `fs_magic` = bytes 1372-1375
+  of that image = sector 106, offset 348.
+- **The on-disk superblock was NOT valid by the time it mattered.** The
+  earlier forensics ran at an older md5 of the drifting disk. A full-disk
+  changed-sector map (699 sectors; partition map and sector 97 untouched)
+  plus a byte-exact reconstruction showed the final state has `fs_magic`
+  zeroed — and QEMU **refuses to boot the reconstructed image**, aborting
+  before any UFS-slice I/O. fsck's verdict was correct all along; the read
+  path was never the problem.
+
+The corruption signature identified the writer: sectors 104-107 each hold
+exactly the next 256 bytes of the intended superblock image in their first
+half and stale zeros in their second — `intended[k*256:(k+1)*256] + 256
+zeros` for k = 0..3, magic in the void. That is the gap-analysis **item 19**
+bug: A/UX Startup's saio issues one WRITE as many `$90` TIs of TC=256
+(esp-master trace: the 2KB superblock write-back is 8 × TC=256), and the old
+completion arm flushed a part-filled sector buffer at every chunk boundary,
+burning one block per chunk and flipping to STATUS at half the data. Mac OS
+writes a whole transfer in a single TI, which is why weeks of Mac-side booting
+never tripped it. Fixed by deleting the partial flush (chunk end = interrupt
+only; only `sbuf_pos == 512` flushes); tb T15 transcribes the 8 × TC=256
+dialect and fails 1029 checks against the old arm.
