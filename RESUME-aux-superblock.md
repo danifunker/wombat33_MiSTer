@@ -1,14 +1,21 @@
-# Resume prompt — A/UX 3.1 on Wombat33: BOTH SCSI bugs fixed; deploy + verify the write-path fix on hardware
+# Resume prompt — A/UX 3.1 BOOTS TO MULTIUSER on Wombat33; only the release build remains
 
 Paste this as the opening message of a new session.
 
-**Status 2026-09-02: the "BAD SUPER BLOCK: MAGIC NUMBER WRONG" mystery is
-SOLVED and the fix is in the tree, sim-proven, committed.** fsck was telling
-the truth: the disk really was corrupted — by our own SCSI **write path**. The
-earlier version of this file sent the investigation after "why does a valid
-superblock read as bad"; that premise was wrong (see §2 for how it fooled us).
-What remains is hardware verification: build, **ask the user, then deploy**,
-restore the pristine disk, boot A/UX, watch fsck pass.
+**Status 2026-09-02, VERIFIED ON HARDWARE: A/UX 3.1 boots to the multiuser
+Finder desktop** (root `/` mounted; screenshots `scratch/boot_4..10.png`:
+"Checking root file system" → "Initializing device drivers" → "Starting
+background processes" → desktop). The "BAD SUPER BLOCK: MAGIC NUMBER WRONG"
+mystery is SOLVED: fsck was telling the truth — the disk really was corrupted,
+by our own SCSI **write path** (§1). Fix committed, sim-proven (tb T15), and
+proven on hardware by the boot above, on a fresh pristine disk restore, with
+the rebuilt debug bitstream (SCSI_TRACE on, seed 13, timing met +0.243 ns).
+
+**All that remains is the RELEASE build** (§4 step 5): re-comment
+`SCSI_TRACE` in `wombat33.qsf` and walk fitter seeds until timing is met.
+The A/UX guest may still be RUNNING at the desktop — shut it down cleanly
+(Finder: Special → Shut Down, or `scripts/guest/shutdown_finder.sh` is for
+the Mac OS side) before any core load.
 
 **Binding rules (unchanged):** never load a core while a guest with a mounted
 HFS volume is running, and **ask before any deploy**. The guest was left at an
@@ -74,32 +81,27 @@ T1-T15: **6556 checks, 0 failures**, lint clean. Write-ups:
 
 | | |
 |---|---|
-| Flashed on the MiSTer | `c823bebe` — has fix #1 (phase flip) but **NOT fix #2: its write path still destroys chunked writes**. Do not let A/UX write with it. |
-| `output_files/wombat33.rbf` | Being rebuilt with both fixes at session end (SCSI_TRACE on, seed 13) — check `bash scripts/build_only.sh` output / `output_files/build_*.log` for the result and timing. |
-| Guest | A/UX Startup at `startup#` (idle) unless the user moved it. |
-| Disk on MiSTer | `games/Wombat33/HD60_512-AUX3.1-Installed.hda`, **corrupted** (md5 03f98fdf). MUST restore pristine before the verification boot: `ssh root@$MISTER_HOST 'cd /media/fat/games/Wombat33 && unzip -o backup/HD60_512-AUX3.1-Installed.zip'` → b44b7623 (~6 min; guest idle first). |
-| Local copies | `scratch/aux/HD60_512-AUX3.1-Installed.hda` = pristine; `HD60-modified-reconstructed.hda` = the failed disk, byte-exact; `HD60-qemu-writes.hda` = pristine after a QEMU boot's writes (intended-bytes oracle). `scratch/overlay_modified.sh` rebuilds the reconstruction from a changed-sector list. |
-| `wombat33.qsf` | `SCSI_TRACE=1` still ON (line ~125), seed 13 — debug build config, fine for the verification boot. |
+| Flashed on the MiSTer | The 2026-09-02 debug build of `output_files/wombat33.rbf` — **both fixes**, SCSI_TRACE on, seed 13, timing met +0.243 ns. This is the build that boots A/UX to multiuser. |
+| Guest | **A/UX 3.1 running at the multiuser Finder desktop** (unless the user moved it). Shut down cleanly before any core load. |
+| Disk on MiSTer | `games/Wombat33/HD60_512-AUX3.1-Installed.hda` — was restored to pristine (b44b7623) just before the verification boot; now carries that boot's legitimate writes. That is normal operation; restore from `backup/HD60_512-AUX3.1-Installed.zip` only if a fresh-disk experiment needs it. |
+| Local copies | `scratch/aux/HD60_512-AUX3.1-Installed.hda` = pristine; `HD60-modified-reconstructed.hda` = the failed disk, byte-exact (md5 03f98fdf); `HD60-qemu-writes.hda` = pristine after a QEMU boot's writes (intended-bytes oracle). `scratch/overlay_modified.sh` rebuilds the reconstruction from a changed-sector list (`scratch/changed_sectors.txt`). |
+| `wombat33.qsf` | `SCSI_TRACE=1` still ON (line ~125), seed 13 — matches the flashed debug build. The release build flips this off. |
 
-## 4. Next moves, in order
+## 4. Next moves
 
-1. **Check the build** finished and met timing (`build_only.sh` refuses to
-   pass off a timing-fail; seed 13 met +0.246 ns with the tracer last time).
-2. **Ask the user, then deploy** (`bash scripts/scsi_trace.sh [secs]` does
-   deploy+capture, or `scripts/deploy_screenshot.sh` alone). Guest must be
-   idle; deploy yanks the volume.
-3. **Restore pristine disk** (§3 command), verify md5 b44b7623.
-4. **Boot A/UX** (⌘B in A/UX Startup: `python scripts/mister_ws.py --host
-   $MISTER_HOST --delay 0.15 down:56 raw:48 up:56`), watch via
-   `bash scripts/grab.sh scratch/state.png`. Expect: fsck pass 1 "dirty" →
-   autorecovery → fsck pass 2 **clean read** → kernel launch toward
-   multiuser. Any new failure: capture screen + SCSI trace, diff against
-   QEMU (`~/qemu-src/build/qemu-system-m68k` in WSL, see §5 of the old doc /
-   [[qemu-golden-reference]]; `scsi_disk_*` and `esp_*` tracing both work).
-5. **Then the release build**: re-comment `SCSI_TRACE` in `wombat33.qsf`,
+Steps 1-4 (build, deploy, restore, verification boot) are **DONE — A/UX
+reached the multiuser desktop 2026-09-02**. What remains:
+
+5. **The release build**: re-comment `SCSI_TRACE` in `wombat33.qsf`,
    find a seed that meets timing (seed 13 missed at −0.390 ns without the
    tracer; walk seeds via `scratch/seeds/restore_seed.sh`, history in the
    qsf comments). Don't hunt timing in your own diff — placement lottery.
+   Deploy needs the guest shut down first (Finder Special → Shut Down) and
+   the user's OK.
+6. Optional polish: exercise A/UX under load (shell, installs) to shake out
+   anything the boot path didn't touch; the debug tracer build is fine for
+   that. If a new failure appears, diff against QEMU
+   ([[qemu-golden-reference]]; `scsi_disk_*` and `esp_*` tracing both work).
 
 ## 5. Env crib (unchanged)
 
